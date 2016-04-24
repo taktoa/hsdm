@@ -1,4 +1,4 @@
-{ writeText, writeScript, hsdm, tightvnc }:
+{ writeText, writeScriptBin, hsdm, tightvnc }:
 
 let
   config = writeText "hsdm.conf" (builtins.toJSON {
@@ -8,7 +8,7 @@ let
     login_cmd = "exec /usr/bin/env bash /nix/store/cbsaaam06nj3v42zkw3gfk4zfz3p3vxy-xsession \"%session\"";
   });
 in
-writeScript
+writeScriptBin
   "hsdm_config"
   ''
     #!/bin/sh
