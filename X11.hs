@@ -1,12 +1,17 @@
+{-# LANGUAGE BangPatterns #-}
+
 module Main where
 
 import           Control.Concurrent
 import           Control.Monad
 import           Data.Bits
+import           Data.ByteString    (ByteString, useAsCString)
+import qualified Data.ByteString    as BS
 import           Data.Int
 import           Data.Word
 import           Graphics.X11.Xlib
 import           System.Exit
+import           System.IO
 import           System.Random
 
 initColor :: Display -> String -> IO Pixel
@@ -34,6 +39,41 @@ mkUnmanagedWindow dpy scr rw x y w h = do
     set_background_pixel attributes backgroundColor
     set_border_pixel attributes borderColor
     createWindow dpy rw x y w h 1 depth inputOutput visual attrmask attributes
+
+createImageFromBS :: ( Integral depth
+                     , Integral offset
+                     , Integral dimension
+                     , Integral padding
+                     , Integral bytesPerLine )
+                     => Display
+                     -> Visual
+                     -> depth
+                     -> ImageFormat
+                     -> offset
+                     -> ByteString
+                     -> dimension
+                     -> dimension
+                     -> padding
+                     -> bytesPerLine
+                     -> IO Image
+createImageFromBS dpy vis depth fmt offset bs w h pad bpl = useAsCString bs go
+  where
+    c :: (Integral a, Num b) => a -> b
+    c = fromIntegral
+    (cdep, coff, cw, ch, cp, cb) = (c depth, c offset, c w, c h, c pad, c bpl)
+    go cs = createImage dpy vis cdep fmt coff cs cw ch cp cb
+
+createImageEasy :: (Integral dimension)
+                   => Display
+                   -> ByteString
+                   -> dimension
+                   -> dimension
+                   -> IO Image
+createImageEasy dpy bs w h
+  = let scr = defaultScreen dpy
+        vis = defaultVisual dpy scr
+    in createImageFromBS dpy vis 0 xyBitmap 0 bs w h 0 8
+
 
 type Point32 = (Int32, Int32)
 type Vector32 = (Word32, Word32)
@@ -72,7 +112,15 @@ main = do dpy <- openDisplay ""
           rootw <- rootWindow dpy dflt
           win <- mkUnmanagedWindow dpy scr rootw 0 0 width height
           mapWindow dpy win
-          drawShit dpy win (width, height) 500
+          hdl <- openFile "output.xbm" ReadMode
+          !xbm <- BS.hGetContents hdl
+          hClose hdl
+          img <- createImageEasy dpy xbm 16 7
+          gc <- createGC dpy win
+          putImage dpy win gc img 0 0 0 0 16 7
+          freeGC dpy gc
+          destroyImage img
           sync dpy False
-          void getLine
+          threadDelay (10 * 1000 * 1000)
+          --void getLine
           exitSuccess
