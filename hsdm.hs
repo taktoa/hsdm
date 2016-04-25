@@ -121,9 +121,11 @@ sessionRunner c username = do
 
 doGui :: ConfigFile -> IO ()
 doGui c = void $ do
+  putStrLn "gui starting"
   pid <- forkProcess (sessionRunner c "test")
   status <- getProcessStatus True False pid
   -- FIXME: use status for something
+  putStrLn "gui stopping"
   return ()
 
 parse :: [String] -> IO (Maybe ConfigFile)

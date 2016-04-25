@@ -2,7 +2,6 @@ let
   pkgs = import <nixpkgs> {};
   callPackage = pkgs.newScope self;
   self = rec {
-    tightvnc = pkgs.tightvnc.overrideDerivation (oldAttrs: { src = /home/clever/x/vnc_unixsrc; });
     hsdm = callPackage ./hsdm.nix {};
     xorg2 = {
       inherit (pkgs.xorg) xwininfo xauth xprop xkeyboardconfig;
@@ -22,7 +21,7 @@ let
       with lib;
       {
         imports = [ <nixpkgs/nixos/modules/virtualisation/qemu-vm.nix> ./hsdm_module.nix ];
-        environment.systemPackages = with pkgs; [ hsdm_config xorg.xwininfo xorg.xauth xorg.xprop xterm ];
+        environment.systemPackages = with pkgs; [ file gdb stdenv chromium ];
         users.users = {
           root.initialPassword = "root";
           test = {
@@ -30,12 +29,14 @@ let
             isNormalUser = true;
           };
         };
+        services.openssh.enable = true;
+        services.openssh.permitRootLogin = "yes";
         services.xserver = {
           enable = true;
           displayManager.hsdm.enable = true;
-          #displayManager.xserverBin = mkForce "{pkgs.coreutils}/bin/env";
+          desktopManager.xfce.enable = true;
           useGlamor = false;
-          deviceSection = ''Option "NoAccel" "true"'';
+          #serverLayoutSection = ''Option "NoTrapSignals"'';
         };
         nixpkgs.config.packageOverrides = pkgs: {
           hsdm = pkgs.callPackage ./hsdm.nix {};

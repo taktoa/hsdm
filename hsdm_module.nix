@@ -9,7 +9,7 @@ let
     default_xserver = dmcfg.xserverBin;
     xserver_arguments = splitString " " dmcfg.xserverArgs;
     sessiondir = dmcfg.session.desktops;
-    login_cmd = "exec ${pkgs.stdenv.shell} ${dmcfg.session.script} \"%session\"";
+    login_cmd = "exec ${pkgs.stdenv.shell} ${dmcfg.session.script} xfce"; # FIXME, hsdm must pass the chosen DE to the script
   };
   configFile = pkgs.writeText "hsdm.conf" (builtins.toJSON configObj);
 in
