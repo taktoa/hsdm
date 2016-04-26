@@ -1,26 +1,30 @@
 let
   pkgs = import <nixpkgs> {};
-  callPackage = pkgs.newScope self;
+  selfCP = pkgs.newScope self;
   self = rec {
-    hsdm = callPackage ./hsdm.nix {};
+    hsdm = selfCP ./hsdm.nix {};
     xorg2 = {
       inherit (pkgs.xorg) xwininfo xauth xprop xkeyboardconfig;
-      xorgserver = pkgs.lib.overrideDerivation pkgs.xorg.xorgserver (oldAttrs: {
+      xorgserver = pkgs.lib.overrideDerivation pkgs.xorg.xorgserver (old: {
         src = /home/clever/apps/xorg-server-1.17.4;
         patches = [];
-        configureFlags = oldAttrs.configureFlags ++ [
+        configureFlags = old.configureFlags ++ [
           "--with-xkb-path=${pkgs.xkeyboard_config}/etc/X11/xkb"
           "--with-xkb-bin-directory=${pkgs.xorg.xkbcomp}/bin"
           "--with-xkb-output=$(out)/share/X11/xkb/compiled"
         ];
       });
     };
-    hsdm_config = callPackage ./hsdm_config.nix {};
+    hsdm-config = selfCP ./hsdm-config.nix {};
     guest = (import <nixpkgs/nixos> {
       configuration = { lib, pkgs, ... }:
       with lib;
       {
-        imports = [ <nixpkgs/nixos/modules/virtualisation/qemu-vm.nix> ./hsdm_module.nix ];
+        imports = [
+           <nixpkgs/nixos/modules/virtualisation/qemu-vm.nix>
+          ./hsdm-module.nix
+        ];
+        # FIXME: for debug, delete later
         environment.systemPackages = with pkgs; [ file gdb stdenv chromium ];
         users.users = {
           root.initialPassword = "root";
@@ -35,12 +39,11 @@ let
           enable = true;
           displayManager.hsdm.enable = true;
           desktopManager.xfce.enable = true;
-          useGlamor = false;
           #serverLayoutSection = ''Option "NoTrapSignals"'';
         };
-        nixpkgs.config.packageOverrides = pkgs: {
-          hsdm = pkgs.callPackage ./hsdm.nix {};
-          hsdm_config = pkgs.callPackage ./hsdm_config.nix {};
+        nixpkgs.config.packageOverrides = pkgs: with pkgs; {
+          hsdm        = callPackage ./hsdm.nix {};
+          hsdm-config = callPackage ./hsdm-config.nix {};
         };
       };
     }).config.system.build.vm;

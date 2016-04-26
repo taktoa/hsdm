@@ -25,7 +25,7 @@ let
   });
 in
 writeScriptBin
-  "hsdm_config"
+  "hsdm-config"
   ''
     #!/bin/sh
     ${hsdm}/bin/hsdm -c ${config}

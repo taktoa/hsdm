@@ -4,12 +4,13 @@ with lib;
 
 let
   dmcfg = config.services.xserver.displayManager;
-  cfg = config.services.xserver.displayManager.hsdm;
+  cfg = dmcfg.hsdm;
   configObj = {
     default_xserver = dmcfg.xserverBin;
     xserver_arguments = splitString " " dmcfg.xserverArgs;
     sessiondir = dmcfg.session.desktops;
-    login_cmd = "exec ${pkgs.stdenv.shell} ${dmcfg.session.script} xfce"; # FIXME, hsdm must pass the chosen DE to the script
+    # FIXME: hsdm must pass the chosen DE to the script
+    login_cmd = "exec ${pkgs.stdenv.shell} ${dmcfg.session.script} xfce";
   };
   configFile = pkgs.writeText "hsdm.conf" (builtins.toJSON configObj);
 in
@@ -20,12 +21,16 @@ in
     };
   };
   config = mkIf cfg.enable {
+    # FIXME: this shouldn't really be necessary? really a NixOS bug though.
     services.xserver.displayManager.slim.enable = false;
     services.xserver.displayManager.job = {
       environment = {
       };
       execCmd = "exec ${pkgs.hsdm}/bin/hsdm -c ${configFile}";
     };
-    security.pam.services.hsdm = { allowNullPassword = true; startSession = true; };
+    security.pam.services.hsdm = {
+      allowNullPassword = true;
+      startSession = true;
+    };
   };
 }

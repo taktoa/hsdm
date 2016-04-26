@@ -3,16 +3,16 @@
 module Main where
 
 import           Control.Concurrent.MVar
-import           Data.Aeson
-import qualified Data.ByteString.Lazy.Char8 as LBSC
-import           System.Environment
-import           System.Exit
 import           Control.Exception
 import           Control.Exception.Lens
 import           Control.Lens
 import           Control.Monad
+import           Data.Aeson
+import qualified Data.ByteString.Lazy.Char8 as LBSC
 import           GHC.Generics
 import           Graphics.X11.Xlib
+import           System.Environment
+import           System.Exit
 import           System.Posix.Directory
 import           System.Posix.PAM
 import           System.Posix.Process
@@ -21,11 +21,11 @@ import           System.Posix.Types
 import           System.Posix.User
 import           System.Process
 
-data ConfigFile = ConfigFile {
-                      default_xserver :: FilePath
-                      ,xserver_arguments :: [String]
-                      ,sessiondir :: FilePath
-                      ,login_cmd :: String } deriving (Generic, Show)
+data ConfigFile = ConfigFile { default_xserver   :: FilePath
+                             , xserver_arguments :: [String]
+                             , sessiondir        :: FilePath
+                             , login_cmd         :: String }
+                deriving (Generic, Show)
 instance FromJSON ConfigFile
 
 oldMain :: IO ()
@@ -69,7 +69,7 @@ pamtest username password = do
   foo <- authenticate "hsdm" username password
   case foo of
     Left code -> print $ pamCodeDetails code
-    Right () -> do
+    Right ()  -> do
       _ <- switchUser username
       return ()
   return ()
@@ -122,19 +122,32 @@ sessionRunner c username = do
   -- pam_close_session(handle, 0);
   return ()
 
+
+
+-- FIXME: Write code for login prompt!
+-- `login' is a continuation that, when run, starts the login process
+-- Before you run `login', the following conditions must hold:
+--     * You must verify that the password given was correct
+--     * You must destroy any X11 'Display's you have created
+--
+-- loginPrompt should check the resulting 'ProcessStatus' and, if an error
+-- occurred, pop up an error message of some kind.
+loginPrompt :: (String -> IO (Maybe ProcessStatus)) -> IO ()
+loginPrompt login = void $ login "test"
+
+
 doGui :: ConfigFile -> IO ()
 doGui c = void $ do
   putStrLn "gui starting"
-  pid <- forkProcess (sessionRunner c "test")
-  status <- getProcessStatus True False pid
-  -- FIXME: use status for something
+  let login username = forkProcess (sessionRunner c username)
+                       >>= getProcessStatus True False
+  loginPrompt login
   putStrLn "gui stopping"
   return ()
 
 parse :: [String] -> IO (Maybe ConfigFile)
-parse ["-h"] = usage >> exit
-parse ["-c" ,file] = decode <$> LBSC.readFile file
-parse _ = usage >> exit
+parse ["-c", file] = decode <$> LBSC.readFile file
+parse _            = usage >> exit
 
 usage = do
   foo <- getProgName
@@ -144,8 +157,8 @@ exit = exitWith ExitSuccess
 main :: IO ()
 main = do
   changeWorkingDirectory "/"
-  result <- parse <$> getArgs
-  case result of
-    Just config -> startX config $ doGui config
-    Nothing -> usage
+  result <- getArgs >>= parse
+  case result
+    of Just cfg -> startX cfg $ doGui cfg
+       Nothing  -> usage
   return ()
