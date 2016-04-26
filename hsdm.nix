@@ -2,7 +2,7 @@
 
 with stdenv.lib;
 let
-  hsEnv = haskellPackages.ghcWithPackages (hsPkgs: with hsPkgs; [ X11 pam lens aeson ]);
+  hsEnv = haskellPackages.ghcWithPackages (hsPkgs: with hsPkgs; [ X11 pam lens aeson colour rasterific-svg ]);
   pathPartMatches = name: path: any (x: x == name) (splitString "/" path);
 in stdenv.mkDerivation {
   name = "hsdm";

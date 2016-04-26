@@ -11,6 +11,7 @@ let
     sessiondir = dmcfg.session.desktops;
     # FIXME: hsdm must pass the chosen DE to the script
     login_cmd = "exec ${pkgs.stdenv.shell} ${dmcfg.session.script} xfce";
+    display = ":0" # FIXME
   };
   configFile = pkgs.writeText "hsdm.conf" (builtins.toJSON configObj);
 in
