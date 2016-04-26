@@ -1,25 +1,197 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE BangPatterns #-}
 
 module Main where
 
+import qualified Codec.Picture.Png        as JP
+import qualified Codec.Picture.Types      as JP
 import           Control.Concurrent
 import           Control.Monad
+import           Control.Monad.Reader
+import           Data.Array.Storable
 import           Data.Bits
-import           Data.ByteString    (ByteString, useAsCString)
-import qualified Data.ByteString    as BS
+import           Data.ByteString          (ByteString, useAsCString)
+import qualified Data.ByteString          as BS
+import           Data.Default
 import           Data.Int
+import           Data.Maybe
 import           Data.Word
-import           Graphics.X11.Xlib
+import           Foreign                  hiding (newArray)
+import           Foreign.C.String         (CString)
+import qualified Graphics.X11.Xlib        as X
+import qualified Graphics.X11.Xlib.Extras as X
 import           System.Exit
 import           System.IO
 import           System.Random
 
-initColor :: Display -> String -> IO Pixel
-initColor dpy color = do
-  let colormap = defaultColormap dpy (defaultScreen dpy)
-  (approx, _) <- allocNamedColor dpy colormap color
-  return $ color_pixel approx
+type Pos = X.Position
+type Dim = X.Dimension
+type Image = X.Image
+type Screen = X.Screen
+type Window = X.Window
+type Display = X.Display
+
+class MonadX11 m where
+  flush       :: m ()
+  sync        :: m ()
+  syncDiscard :: m ()
+  getGeometry :: m (Dim, Dim)
+
+class MonadGC m where
+  putImage :: Image -> Pos -> Pos -> Dim -> Dim -> IO ()
+
+newtype XM a = XM (ReaderT (Display, Window) IO a)
+             deriving (Functor, Applicative, Monad, MonadIO)
+
+runXM :: XM a -> IO a
+runXM (XM r) = do
+  dpy <- X.openDisplay ""
+  rootw <- X.rootWindow dpy (X.defaultScreen dpy)
+  attr <- X.getWindowAttributes dpy rootw
+  let winW = fromIntegral $ X.wa_width attr
+  let winH = fromIntegral $ X.wa_height attr
+  win <- X.createSimpleWindow dpy rootw 0 0 winW winH 1 0 0
+  X.selectInput dpy win X.exposureMask
+  X.mapWindow dpy win
+  result <- runReaderT r (dpy, win)
+  X.closeDisplay dpy
+  return result
+
+wrapXM :: _
+wrapXM = XM . ReaderT
+
+instance MonadX11 XM where
+  flush = XM $ ReaderT $ \(dpy, _) -> X.flush dpy
+  sync  = XM $ ReaderT $ \(dpy, _) -> X.sync dpy False
+  syncDiscard = XM $ ReaderT $ \(dpy, _) -> X.sync dpy True
+  getGeometry = undefined
+
+newtype GCM a = GCM (ReaderT X.GC XM a)
+              deriving (Functor, Applicative, Monad, MonadIO)
+
+runGCM :: GCM a -> XM a
+runGCM (GCM r) = do
+  gc <- XM $ ReaderT $ uncurry X.createGC
+  result <- runReaderT r gc
+  XM $ ReaderT $ \(dpy, _) -> X.freeGC dpy gc
+  return result
+
+instance MonadX11 GCM where
+  flush = GCM $ lift $ flush
+
+instance MonadGC GCM where
+
+
+data XImg = XImg { xImage     :: !X.Image
+                 , xImageData :: !(StorableArray (Int, Int, Int) Word8)
+                 , xImageH    :: !Int
+                 , xImageW    :: !Int }
+
+testDrawImage :: FilePath -> IO ()
+testDrawImage file = do
+  edimg <- JP.decodePng <$> BS.readFile file
+  case edimg of
+    Left  err  -> putStrLn err
+    Right dimg -> runXM $ do
+      fromMaybe
+        (putStrLn "FAILURE")
+        (drawJPImage <$> convertDynImage dimg)
+      flush
+      sync
+      flush
+      liftIO getLine
+      flush
+
+drawImg :: XImg -> XM ()
+drawImg ximg = runGCM $ do
+  (w, h) <- getGeometry
+  putImage (xImage ximg) 0 0 w h
+  freeGC dpy gc
+  syncDiscard
+
+initColor :: String -> XM Pixel
+initColor color = do
+  colormap <- defaultColormap
+  -- let colormap = defaultColormap dpy (defaultScreen dpy)
+  (apros, _) <- allocNamedColor dpy colormap color
+  return $ color_pixel apros
+
+type ILArray = StorableArray (Int, Int, Int) Word8
+
+fromJPData :: JP.Image JP.PixelRGBA8 -> XM ILArray
+fromJPData img = liftIO $ newArray ((0, 0, 0), (h - 1, w - 1, 3)) 0 >>= setValues
+  where
+    w = JP.imageWidth  img
+    h = JP.imageHeight img
+    getC :: Int -> JP.PixelRGBA8 -> Word8
+    getC 0 (JP.PixelRGBA8 r _ _ _) = r
+    getC 1 (JP.PixelRGBA8 _ g _ _) = g
+    getC 2 (JP.PixelRGBA8 _ _ b _) = b
+    getC 3 (JP.PixelRGBA8 _ _ _ a) = a
+    getC _ _                       = error "Invalid color channel"
+    getPix = JP.pixelAt img
+    setValues :: ILArray -> IO ILArray
+    setValues arr = getBounds arr >>= go . range
+      where
+        go :: [(Int, Int, Int)] -> IO ILArray
+        go []             = return arr
+        go ((y, x, c):xs) = do writeArray arr (y, x, c) $ getC c $ getPix x y
+                               go xs
+
+makeXImage :: JP.Image JP.PixelRGBA8 -> IO XImg
+makeXImage image = do
+
+  d <- fromJPData image
+  xid <- mapIndices bs mapIdx d
+  withStorableArray xid (ci xid . castPtr)
+  where
+    w, h :: Integral i => i
+    w = fromIntegral $ JP.imageWidth  image
+    h = fromIntegral $ JP.imageHeight image
+    scr = defaultScreen
+    dep = defaultDepth  dpy scr
+    vis = defaultVisual dpy scr
+    ci :: StorableArray (Int, Int, Int) Word8 -> CString -> IO XImg
+    ci bytes p = let makeXI x = XImg x bytes w h
+                 in makeXI <$> createImage dpy vis dep zPixmap 0 p w h 32 0
+    bs = ((0, 0, 0), (h - 1, w - 1, 3))
+    mapIdx (y, x, c) = let helper 0 = 2
+                           helper 1 = 1
+                           helper 2 = 0
+                           helper 3 = 0
+                       in (y, x, helper c)
+
+drawJPImage :: JP.Image JP.PixelRGBA8 -> XM ()
+drawJPImage image = makeXImage image >>= drawImg
+
+convertDynImage :: JP.DynamicImage -> Maybe (JP.Image JP.PixelRGBA8)
+convertDynImage (JP.ImageY8     img) = Just $ JP.promoteImage img
+convertDynImage (JP.ImageYA8    img) = Just $ JP.promoteImage img
+convertDynImage (JP.ImageRGB8   img) = Just $ JP.promoteImage img
+convertDynImage (JP.ImageRGBA8  img) = Just $ JP.promoteImage img
+convertDynImage (JP.ImageY16      _) = Nothing
+convertDynImage (JP.ImageYF       _) = Nothing
+convertDynImage (JP.ImageYA16     _) = Nothing
+convertDynImage (JP.ImageRGB16    _) = Nothing
+convertDynImage (JP.ImageRGBF     _) = Nothing
+convertDynImage (JP.ImageRGBA16   _) = Nothing
+convertDynImage (JP.ImageYCbCr8   _) = Nothing
+convertDynImage (JP.ImageCMYK8    _) = Nothing
+convertDynImage (JP.ImageCMYK16   _) = Nothing
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+{-
 
 mkUnmanagedWindow :: Display
                   -> Screen
@@ -127,171 +299,4 @@ main = do dpy <- openDisplay ""
           exitSuccess
 
 
-
-
-
-
-
-
-
-
-
-
-
-import qualified Codec.Picture.Png        as JP
-import qualified Codec.Picture.Types      as JP
-import           Control.Monad.Reader
-import           Data.Array.Storable
-import qualified Data.ByteString          as BS
-import           Data.Default
-import           Data.Maybe
-import           Foreign                  hiding (newArray)
-import           Foreign.C.String         (CString)
-import qualified Graphics.X11.Xlib        as X
-import qualified Graphics.X11.Xlib.Extras as X
-
-newtype DisplayM a = DisplayM (ReaderT X.Display IO a)
-newtype WindowM a = WindowM (ReaderT (X.Display, X.Window) IO a)
-newtype GCM a = GCM (ReaderT (X.Display, X.Window, X.GC) IO a)
-
-
--- runGCM :: GCM a ->
-
-data XImg = XImg { xImage     :: X.Image
-                 , xImageData :: StorableArray (Int, Int, Int) Word8
-                 , xImageH    :: Int
-                 , xImageW    :: Int
-                 }
-
-instance Default X.WMHints where
-  def = X.WMHints { X.wmh_flags         = 0
-                  , X.wmh_input         = False
-                  , X.wmh_initial_state = 1
-                  , X.wmh_icon_pixmap   = 0
-                  , X.wmh_icon_window   = 0
-                  , X.wmh_icon_x        = 0
-                  , X.wmh_icon_y        = 0
-                  , X.wmh_icon_mask     = 0
-                  , X.wmh_window_group  = 0
-                  }
-
-getDimensions :: JP.DynamicImage -> (Int, Int)
-getDimensions dimg = ( JP.dynamicMap JP.imageWidth  dimg
-                     , JP.dynamicMap JP.imageHeight dimg )
-
-padDimensions :: Int -> (Int, Int) -> (Int, Int)
-padDimensions p (w, h) = (w + 2 * p, h + 2 * p)
-
-testDrawImage :: FilePath -> IO ()
-testDrawImage file = do
-  edimg <- JP.decodePng <$> BS.readFile file
-  case edimg of
-    Left  err  -> putStrLn err
-    Right dimg -> do
-      (dpy, win) <- initX $ getDimensions dimg
-      let getAtom str = X.internAtom dpy str False
-      let setProperty k v = do ka <- getAtom k
-                               va <- getAtom v
-                               let mode = X.propModeReplace
-                               X.changeProperty32 dpy win ka ka mode [fromIntegral va]
-      setProperty "_NET_WM_WINDOW_TYPE" "_NET_WM_WINDOW_TYPE_DIALOG"
-      X.flush dpy
-      fromMaybe
-        (putStrLn "FAILURE")
-        (drawJPImage dpy win <$> convertDynImage dimg)
-      X.flush dpy
-      X.sync dpy False
-      X.flush dpy
-      getLine
-      X.flush dpy
-      X.closeDisplay dpy
-
-initX :: (Int, Int) -> IO (X.Display, X.Window)
-initX (w, h) = do
-  dpy <- X.openDisplay ""
-  rootw <- X.rootWindow dpy (X.defaultScreen dpy)
-  win <- mkWin dpy rootw
-  X.selectInput dpy win X.exposureMask
-  X.mapWindow dpy win
-  return (dpy, win)
-  where
-    mkWin dpy rootw = do
-      attr <- X.getWindowAttributes dpy rootw
-      col <- initColor dpy "#000000"
-      X.createSimpleWindow dpy rootw 0 0 (fromIntegral $ X.wa_width attr) (fromIntegral $ X.wa_height attr) 1 col col
-
-drawImg :: X.Display -> X.Window -> XImg -> IO ()
-drawImg dpy win ximg = do
-  bgcolor <- initColor dpy "#000000"
-  gc <- X.createGC dpy win
-  (_, _, _, w, h, _, _) <- X.getGeometry dpy win
-  X.putImage dpy win gc (xImage ximg) 0 0 0 0 w h
-  X.freeGC dpy gc
-  X.sync dpy True
-
-initColor :: X.Display -> String -> IO X.Pixel
-initColor dpy color = do
-  let colormap = X.defaultColormap dpy (X.defaultScreen dpy)
-  (apros, _) <- X.allocNamedColor dpy colormap color
-  return $ X.color_pixel apros
-
-type ILArray = StorableArray (Int, Int, Int) Word8
-
-fromJPData :: JP.Image JP.PixelRGBA8 -> IO ILArray
-fromJPData img = newArray ((0, 0, 0), (h - 1, w - 1, 3)) 0 >>= setValues
-  where
-    w = JP.imageWidth  img
-    h = JP.imageHeight img
-    getC :: Int -> JP.PixelRGBA8 -> Word8
-    getC 0 (JP.PixelRGBA8 r _ _ _) = r
-    getC 1 (JP.PixelRGBA8 _ g _ _) = g
-    getC 2 (JP.PixelRGBA8 _ _ b _) = b
-    getC 3 (JP.PixelRGBA8 _ _ _ a) = a
-    getC _ _                       = error "Invalid color channel"
-    getPix = JP.pixelAt img
-    setValues :: ILArray -> IO ILArray
-    setValues arr = getBounds arr >>= go . range
-      where
-        go :: [(Int, Int, Int)] -> IO ILArray
-        go []             = return arr
-        go ((y, x, c):xs) = do writeArray arr (y, x, c) $ getC c $ getPix x y
-                               go xs
-
-makeXImage :: X.Display -> JP.Image JP.PixelRGBA8 -> IO XImg
-makeXImage dpy image = do d <- fromJPData image
-                          xid <- mapIndices bs mapIdx d
-                          withStorableArray xid (ci xid . castPtr)
-  where
-    w, h :: Integral i => i
-    w = fromIntegral $ JP.imageWidth  image
-    h = fromIntegral $ JP.imageHeight image
-    scr = X.defaultScreen dpy
-    dep = X.defaultDepth  dpy scr
-    vis = X.defaultVisual dpy scr
-    ci :: StorableArray (Int, Int, Int) Word8 -> CString -> IO XImg
-    ci bytes p = let makeXI x = XImg x bytes w h
-                 in makeXI <$> X.createImage dpy vis dep X.zPixmap 0 p w h 32 0
-    bs = ((0, 0, 0), (h - 1, w - 1, 3))
-    mapIdx (y, x, c) = let helper 0 = 2
-                           helper 1 = 1
-                           helper 2 = 0
-                           helper 3 = 0
-                       in (y, x, helper c)
-
-drawJPImage :: X.Display -> X.Window -> JP.Image JP.PixelRGBA8 -> IO ()
-drawJPImage dpy win image = makeXImage dpy image >>= drawImg dpy win
-
-convertDynImage :: JP.DynamicImage -> Maybe (JP.Image JP.PixelRGBA8)
-convertDynImage (JP.ImageY8     img) = Just $ JP.promoteImage img
-convertDynImage (JP.ImageYA8    img) = Just $ JP.promoteImage img
-convertDynImage (JP.ImageRGB8   img) = Just $ JP.promoteImage img
-convertDynImage (JP.ImageRGBA8  img) = Just $ JP.promoteImage img
-convertDynImage (JP.ImageY16      _) = Nothing
-convertDynImage (JP.ImageYF       _) = Nothing
-convertDynImage (JP.ImageYA16     _) = Nothing
-convertDynImage (JP.ImageRGB16    _) = Nothing
-convertDynImage (JP.ImageRGBF     _) = Nothing
-convertDynImage (JP.ImageRGBA16   _) = Nothing
-convertDynImage (JP.ImageYCbCr8   _) = Nothing
-convertDynImage (JP.ImageCMYK8    _) = Nothing
-convertDynImage (JP.ImageCMYK16   _) = Nothing
+-}
