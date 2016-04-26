@@ -101,6 +101,8 @@ startX c f = do
 sessionRunner :: ConfigFile -> String -> IO ()
 sessionRunner c username = do
   entry <- switchUser "test"
+  -- pam_setcred(handle, PAM_ESTABLISH_CRED);
+  -- pam_open_session(handle, 0);
   --let cmd = RawCommand "/nix/store/idm1067y9i6m87crjqrbamdsq2ma5r7p-bash-4.3-p42/bin/bash" [ "/nix/store/sbmm3fpgh5sgwhsaaq9k9v66xf8019nh-xsession", "xfce" ]
   --let cmd = RawCommand "/run/current-system/sw/bin/xterm" [ ]
   --let cmd = RawCommand "/run/current-system/sw/bin/strace" [ "-ff", "-o", "/home/test/logfiles3", "-s", "90000", "/run/current-system/sw/bin/xterm"]
@@ -117,6 +119,7 @@ sessionRunner c username = do
   changeWorkingDirectory $ homeDirectory entry
   (_, _, _, ph) <- createProcess proc1
   waitForProcess ph
+  -- pam_close_session(handle, 0);
   return ()
 
 doGui :: ConfigFile -> IO ()
@@ -130,22 +133,19 @@ doGui c = void $ do
 
 parse :: [String] -> IO (Maybe ConfigFile)
 parse ["-h"] = usage >> exit
-parse ["-c" ,file] = do
-  configfile <- LBSC.readFile file
-  return $ decode configfile
+parse ["-c" ,file] = decode <$> LBSC.readFile file
 parse _ = usage >> exit
 
 usage = do
-  foo <- getProgName;
+  foo <- getProgName
   putStrLn $ "Usage: " ++ foo ++ " -c config_file"
 exit = exitWith ExitSuccess
 
 main :: IO ()
 main = do
   changeWorkingDirectory "/"
-  args <- getArgs
-  result <- parse args
+  result <- parse <$> getArgs
   case result of
-    (Just config) -> startX config $ doGui config
+    Just config -> startX config $ doGui config
     Nothing -> usage
   return ()
