@@ -57,5 +57,6 @@ foreign import ccall "security/pam_appl.h pam_authenticate" c_pam_authenticate :
 foreign import ccall "security/pam_appl.h pam_setcred" c_pam_setcred :: Ptr CPamHandleT -> CInt -> IO CInt
 foreign import ccall "security/pam_appl.h pam_acct_mgmt" c_pam_acct_mgmt :: Ptr CPamHandleT -> CInt -> IO CInt
 foreign import ccall "security/pam_appl.h pam_open_session" c_pam_open_session :: Ptr CPamHandleT -> CInt -> IO CInt
-foreign import ccall "security/pam_appl.h pam_close_session" c_pam_close_session :: Ptr CPamHandleT -> CInt -> IO CInt
-foreign import ccall "security/pam_appl.h pam_end" c_pam_end :: Ptr CPamHandleT -> CInt -> IO CInt
+foreign import ccall "security/pam_appl.h pam_close_session" c_pam_close_session  :: Ptr CPamHandleT -> CInt -> IO CInt
+foreign import ccall "security/pam_appl.h pam_end" c_pam_end                      :: Ptr CPamHandleT -> CInt -> IO CInt
+foreign import ccall "security/pam_appl.h pam_set_item" c_pam_set_item            :: Ptr CPamHandleT -> CInt -> Ptr () -> IO CInt

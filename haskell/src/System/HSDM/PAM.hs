@@ -11,11 +11,12 @@ import           Foreign.Marshal.Array
 import           Foreign.Ptr
 import           Foreign.Storable
 import           System.HSDM.PAM.Internals
+import           System.IO
 
 -- the opaque void* from pam
 data CPamHandle = CPamHandle
 -- the handle returned to the app
-data PamHandle  = PamHandle (Ptr CPamHandleT, FunPtr ConvFunc)
+data PamHandle  = PamHandle (Ptr CPamHandleT, FunPtr ConvFunc) deriving (Show)
 
 data PamMessage = PamMessage { pamString :: String
                              , pamStyle  :: PamStyle }
@@ -27,11 +28,11 @@ data PAMReturnCode = PAM_SUCCESS | PAM_OPEN_ERR | PAM_SYMBOL_ERR | PAM_SERVICE_E
 
 data PamCredFlags = PAM_ESTABLISH_CRED | PAM_DELETE_CRED | PAM_REINITIALIZE_CRED | PAM_REFRESH_CRED deriving (Enum, Show)
 
-data CPamResponse
-
 data PamStyle = PamPromptEchoOff
               | PamPromptEchoOn
               | PamErrorMsg | PamTextInfo deriving (Show, Eq)
+
+data PAMItem = PAM_TTY { tty :: String }
 
 type PAMConv = [PamMessage] -> IO [PamResponse]
 
@@ -114,9 +115,11 @@ pamSetCred (PamHandle (hnd,_)) (silent, flag) = do
   ret <- c_pam_setcred hnd (flag' .|. silent')
   return $ toEnum $ fromIntegral ret
 
-pamEnd :: PamHandle -> CInt -> IO PAMReturnCode
+pamEnd :: PamHandle -> Int -> IO PAMReturnCode
 pamEnd (PamHandle (hnd,_)) status = do
-  ret <- c_pam_end hnd status
+  putStrLn "ending"
+  hFlush stdout
+  ret <- c_pam_end hnd $ fromIntegral status
   return $ toEnum $ fromIntegral ret
 
 pamOpenSession :: PamHandle -> Bool -> IO PAMReturnCode
@@ -127,3 +130,15 @@ pamCloseSession :: PamHandle -> Bool -> IO PAMReturnCode
 pamCloseSession (PamHandle (hnd,_)) silent = do
   ret <- c_pam_close_session hnd $ if silent then 0x8000 else 0
   return $ toEnum $ fromIntegral ret
+
+pamSetItem :: PamHandle -> PAMItem -> IO PAMReturnCode
+pamSetItem (PamHandle (hnd,_)) item = do
+  let (itemType,func) = getPtr item
+  ptr <- func
+  let ptr' = castPtr ptr :: Ptr ()
+  ret <- c_pam_set_item hnd itemType ptr'
+  free ptr
+  return $ toEnum $ fromIntegral ret
+  where
+    getPtr :: PAMItem -> (CInt, IO CString)
+    getPtr (PAM_TTY tty) = (3, newCString tty)
