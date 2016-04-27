@@ -3,25 +3,28 @@
 
 module PAM where
 
-import Foreign.C
-import Foreign.Marshal.Alloc
-import Foreign.Marshal.Array
-import Foreign.Storable
-import Foreign.Ptr
-import Foreign.StablePtr
+import           Data.Monoid
+import           Foreign.C
+import           Foreign.Marshal.Alloc
+import           Foreign.Marshal.Array
+import           Foreign.Ptr
+import           Foreign.StablePtr
+import           Foreign.Storable
 
 -- the opaque void* from pam
 data CPamHandle = CPamHandle
 -- the handle returned to the app
 data PamHandle  = PamHandle (Ptr CPamHandle, FunPtr ConvFunc)
 
-data PamMessage = PamMessage {
-  pamString :: String
-  , pamStyle :: PamStyle } deriving (Show, Eq)
+data PamMessage = PamMessage { pamString :: String
+                             , pamStyle  :: PamStyle }
+                deriving (Show, Eq)
+
 data PamResponse = PamResponse String deriving (Show, Eq)
 
 data CPamMessage = CPamMessage { messageStyle :: CInt
-                                 , msg :: CString } deriving (Show, Eq)
+                               , msg          :: CString }
+                 deriving (Show, Eq)
 data CPamResponse
 
 data PamStyle = PamPromptEchoOff | PamPromptEchoOn | PamErrorMsg | PamTextInfo deriving (Show, Eq)
@@ -30,7 +33,7 @@ data PamRetCode = PamSuccess
                 deriving (Show, Eq)
 
 data CPamConv = CPamConv {
-  conv :: FunPtr ConvFunc
+  conv          :: FunPtr ConvFunc
   , appdata_ptr :: Ptr () }
 instance Storable CPamConv where
   alignment _ = alignment (undefined :: CDouble)
@@ -57,25 +60,28 @@ type ConvFunc = CInt -> Ptr ( Ptr CPamMessage) -> Ptr ( Ptr ()) -> Ptr () -> IO 
 foreign import ccall "wrapper" mkconvFunc :: ConvFunc -> IO (FunPtr ConvFunc)
 
 messageFromC :: CPamMessage -> IO PamMessage
-messageFromC cmes =
-  let style = case messageStyle cmes of
-    1 -> PamPromptEchoOff
-    2 -> PamPromptEchoOn
-    3 -> PamErrorMsg
-    4 -> PamTextInfo
-    a -> error $ "unknown style value: " ++ show a
-  in do
-    str <- peekCString $ msg cmes
-    return $ PamMessage str style
+messageFromC cmes = (\s -> PamMessage s style) <$> peekCString (msg cmes)
+  where
+    style = case messageStyle cmes
+            of 1 -> PamPromptEchoOff
+               2 -> PamPromptEchoOn
+               3 -> PamErrorMsg
+               4 -> PamTextInfo
+               a -> error $ "unknown style value: " ++ show a
 
-convWrapper :: PAMConv -> CInt -> Ptr (Ptr CPamMessage) -> Ptr ( Ptr ()) -> Ptr () -> IO CInt
-convWrapper _        0     _       _        _       = return 19 -- an error code?
-convWrapper userConv count messages response appdata = do
-  putStrLn $ "in wrapper with " ++ (show count)
-  p1 <- peek messages
+convWrapper :: PAMConv               -- A callback given by the user
+            -> CInt                  -- Number of items in the array
+            -> Ptr (Ptr CPamMessage) -- Array of messages
+            -> Ptr (Ptr ())          -- Responses going back out to PAM (?)
+            -> Ptr ()                -- Pointer for application data (useless)
+            -> IO CInt               -- Status code (0 indicates success)
+convWrapper _     c _    _    _  | c <= 0 = return 19 -- an error code?
+convWrapper userC c msgs resp dp          = do
+  putStrLn $ "in wrapper with " <> (show c)
+  p1 <- peek msgs
 
   -- turn input into array of pointers
-  cMessages <- peekArray (fromIntegral count) p1
+  cMessages <- peekArray (fromIntegral c) p1
   print cMessages
 
   -- turn array of pointers into array of data's
@@ -96,7 +102,7 @@ pamStart service user conv = do
 
   pamHandlePtr <- malloc
   poke pamHandlePtr nullPtr
-  
+
   r1 <- c_pam_start cService cUser convPtr pamHandlePtr
   putStrLn $ "r1: " ++ (show r1)
 
