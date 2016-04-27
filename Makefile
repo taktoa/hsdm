@@ -2,6 +2,9 @@
 
 all: hsdm.nix
 
+repl: hsdm.nix
+	nix-shell -A hsdm --run "cd haskell; ./run-repl"
+
 clean:
 	-rm -f hsdm.nix &>/dev/null || true
 

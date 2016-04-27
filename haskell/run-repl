@@ -1,0 +1,12 @@
+#!/bin/sh
+
+cabalGHCFlags () {
+    echo $NIX_LDFLAGS               \
+        | sed 's/-L/\n-L/g'         \
+        | sed 's/-rpath/\n-rpath/g' \
+        | grep -v rpath             \
+        | tr -d '\n'
+}
+
+cabal repl --ghc-options="$(cabalGHCFlags)"
+
