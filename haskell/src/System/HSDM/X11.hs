@@ -6,8 +6,8 @@ module System.HSDM.X11 where
 import qualified Codec.Picture.Png           as JP
 import qualified Codec.Picture.Types         as JP
 import           Control.Concurrent
+import           Control.Lens
 import           Control.Monad
-import           Control.Monad.Reader
 import           Data.Array.Storable
 import           Data.Bits
 import           Data.ByteString             (ByteString, useAsCString)
@@ -17,11 +17,14 @@ import           Data.Default
 import           Data.Int
 import           Data.Maybe
 import           Data.Semigroup
+import           Data.Set                    (Set)
+import qualified Data.Set                    as Set
 import           Data.Typeable               (Typeable)
 import           Data.Word
 import           Diagrams
 import           Diagrams.Backend.Rasterific
 import           Foreign                     (castPtr)
+import           Foreign.C                   (CInt)
 import           Foreign.C.String            (CString)
 import           Graphics.Rasterific.Svg
 import qualified Graphics.X11.Xlib           as X
@@ -59,87 +62,94 @@ drawDia dpy win = drawJPImage dpy win
 example1, example2 :: XDiagram
 example1 = fc C.blue (circle 3) ||| fc C.red  (rect 5 8)
 example2 = fc C.red  (circle 3) ||| fc C.blue (rect 5 8)
-data X11EventType = EKeyPress
-                  | EKeyRelease
-                  | EButtonPress
-                  | EButtonRelease
-                  | EMotionNotify
-                  | EEnterNotify
-                  | ELeaveNotify
-                  | EFocusIn
-                  | EFocusOut
-                  | EKeymapNotify
-                  | EExpose
-                  | EGraphicsExpose
-                  | ENoExpose
-                  | EVisibilityNotify
-                  | ECreateNotify
-                  | EDestroyNotify
-                  | EUnmapNotify
-                  | EMapNotify
-                  | EMapRequest
-                  | EReparentNotify
-                  | EConfigureNotify
-                  | EConfigureRequest
-                  | EGravityNotify
-                  | EResizeRequest
-                  | ECirculateNotify
-                  | ECirculateRequest
-                  | EPropertyNotify
-                  | ESelectionClear
-                  | ESelectionRequest
-                  | ESelectionNotify
-                  | EColormapNotify
-                  | EClientMessage
-                  | EMappingNotify
-                  | ERRScreenChangeNotify
-                  | ERRNotify
-                  | ERRNotifyCrtcChange
-                  | ERRNotifyOutputChange
-                  | ERRNotifyOutputProperty
-                  deriving (Eq, Read, Show)
 
-convEventType :: X.EventType -> Maybe X11EventType
-convEventType e | e == X.keyPress               = Just EKeyPress
-convEventType e | e == X.keyRelease             = Just EKeyRelease
-convEventType e | e == X.buttonPress            = Just EButtonPress
-convEventType e | e == X.buttonRelease          = Just EButtonRelease
-convEventType e | e == X.motionNotify           = Just EMotionNotify
-convEventType e | e == X.enterNotify            = Just EEnterNotify
-convEventType e | e == X.leaveNotify            = Just ELeaveNotify
-convEventType e | e == X.focusIn                = Just EFocusIn
-convEventType e | e == X.focusOut               = Just EFocusOut
-convEventType e | e == X.keymapNotify           = Just EKeymapNotify
-convEventType e | e == X.expose                 = Just EExpose
-convEventType e | e == X.graphicsExpose         = Just EGraphicsExpose
-convEventType e | e == X.noExpose               = Just ENoExpose
-convEventType e | e == X.visibilityNotify       = Just EVisibilityNotify
-convEventType e | e == X.createNotify           = Just ECreateNotify
-convEventType e | e == X.destroyNotify          = Just EDestroyNotify
-convEventType e | e == X.unmapNotify            = Just EUnmapNotify
-convEventType e | e == X.mapNotify              = Just EMapNotify
-convEventType e | e == X.mapRequest             = Just EMapRequest
-convEventType e | e == X.reparentNotify         = Just EReparentNotify
-convEventType e | e == X.configureNotify        = Just EConfigureNotify
-convEventType e | e == X.configureRequest       = Just EConfigureRequest
-convEventType e | e == X.gravityNotify          = Just EGravityNotify
-convEventType e | e == X.resizeRequest          = Just EResizeRequest
-convEventType e | e == X.circulateNotify        = Just ECirculateNotify
-convEventType e | e == X.circulateRequest       = Just ECirculateRequest
-convEventType e | e == X.propertyNotify         = Just EPropertyNotify
-convEventType e | e == X.selectionClear         = Just ESelectionClear
-convEventType e | e == X.selectionRequest       = Just ESelectionRequest
-convEventType e | e == X.selectionNotify        = Just ESelectionNotify
-convEventType e | e == X.colormapNotify         = Just EColormapNotify
-convEventType e | e == X.clientMessage          = Just EClientMessage
-convEventType e | e == X.mappingNotify          = Just EMappingNotify
-convEventType e | e == X.rrScreenChangeNotify   = Just ERRScreenChangeNotify
-convEventType e | e == X.rrNotify               = Just ERRNotify
-convEventType e | e == X.rrNotifyCrtcChange     = Just ERRNotifyCrtcChange
-convEventType e | e == X.rrNotifyOutputChange   = Just ERRNotifyOutputChange
-convEventType e | e == X.rrNotifyOutputProperty = Just ERRNotifyOutputProperty
-convEventType _                                 = Nothing
+type X11Position = V2 Int
 
+type X11Button  = X.Button
+type X11KeyCode = X.KeyCode
+
+data X11Mask = MShift
+             | MLock
+             | MControl
+             | MMod1
+             | MMod2
+             | MMod3
+             | MMod4
+             | MMod5
+             | MButton1
+             | MButton2
+             | MButton3
+             | MButton4
+             | MButton5
+             deriving (Eq, Ord, Read, Show)
+
+newtype X11Modifier = X11Modifier { _masks :: Set X11Mask }
+                    deriving (Eq, Read, Show, Monoid)
+
+data X11EventData d = X11EventData { _X11Event_root     :: !X.Window
+                                   , _X11Event_child    :: !X.Window
+                                   , _X11Event_time     :: !X.Time
+                                   , _X11Event_cpos     :: !X11Position
+                                   , _X11Event_rpos     :: !X11Position
+                                   , _X11Event_modifier :: !X11Modifier
+                                   , _X11Event_detail   :: !d
+                                   }
+                    deriving (Eq, Show)
+
+data X11Event = KeyPress      !(X11EventData X11KeyCode)
+              | KeyRelease    !(X11EventData X11KeyCode)
+              | ButtonPress   !(X11EventData X11Button)
+              | ButtonRelease !(X11EventData X11Button)
+              | MotionNotify  !(X11EventData ())
+              deriving (Eq, Show)
+
+type XEventTuple d = ( X.Window, X.Window, X.Time
+                     , CInt, CInt, CInt, CInt
+                     , X.Modifier, d, Bool )
+
+makeX11Event :: X.XEventPtr -> IO (Maybe X11Event)
+makeX11Event xev = X.get_EventType xev >>= go
+  where
+    go e | e == X.keyPress      = pure . KeyPress      <$> makeKeyEvent
+    go e | e == X.keyRelease    = pure . KeyRelease    <$> makeKeyEvent
+    go e | e == X.buttonPress   = pure . ButtonPress   <$> makeMouseEvent
+    go e | e == X.buttonRelease = pure . ButtonRelease <$> makeMouseEvent
+    go e | e == X.motionNotify  = pure . MotionNotify  <$> makeMotionEvent
+    go _                        = return Nothing
+
+    makeKeyEvent    = makeEvent X.get_KeyEvent id
+    makeMouseEvent  = makeEvent X.get_ButtonEvent id
+    makeMotionEvent = makeEvent X.get_MotionEvent (const ())
+
+    makeEvent :: (X.XEventPtr -> IO (XEventTuple t))
+              -> (t -> d) -> IO (X11EventData d)
+    makeEvent getter f = do
+      (rw, cw, time, cx, cy, rx, ry, m, d, _) <- getter xev
+      let cpos = V2 (fromIntegral cx) (fromIntegral cy)
+      let rpos = V2 (fromIntegral rx) (fromIntegral ry)
+      return $ X11EventData rw cw time cpos rpos (makeModifier m) (f d)
+
+makeModifier :: X.Modifier -> X11Modifier
+makeModifier mod = X11Modifier
+                   $ helper X.shiftMask   MShift
+                   $ helper X.lockMask    MLock
+                   $ helper X.controlMask MControl
+                   $ helper X.mod1Mask    MMod1
+                   $ helper X.mod2Mask    MMod2
+                   $ helper X.mod3Mask    MMod3
+                   $ helper X.mod4Mask    MMod4
+                   $ helper X.mod5Mask    MMod5
+                   $ helper X.button1Mask MButton1
+                   $ helper X.button2Mask MButton2
+                   $ helper X.button3Mask MButton3
+                   $ helper X.button4Mask MButton4
+                   $ helper X.button5Mask MButton5
+                   $ mempty
+  where
+    helper :: X.Modifier -> X11Mask -> Set X11Mask -> Set X11Mask
+    helper m e s | m ∈ mod = Set.insert e s
+    helper _ _ s           = s
+    a ∈ b = (a .&. complement b) == 0
 
 testDrawImage :: IO ()
 testDrawImage = do
@@ -165,7 +175,8 @@ testDrawImage = do
                while ((/= 0) <$> X.pending dpy)
                  $ X.allocaXEvent
                  $ \xev -> do X.nextEvent dpy xev
-                              X.get_EventType xev >>= print . convEventType
+                              makeX11Event xev >>= print
+                              --X.get_EventType xev >>= print . convEventType
                X.pending dpy >>= print
   --drawDia dpy win $ circle 5 ||| rect 10 8
   _ <- getLine
@@ -365,26 +376,3 @@ main = do dpy <- openDisplay ""
 
 
 -}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

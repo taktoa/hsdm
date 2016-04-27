@@ -8,5 +8,5 @@ cabalGHCFlags () {
         | tr -d '\n'
 }
 
-cabal repl --ghc-options="$(cabalGHCFlags)"
+cabal repl --ghc-options="$(cabalGHCFlags)" "$@"
 
