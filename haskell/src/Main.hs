@@ -1,7 +1,6 @@
 module Main where
 
-import PAM
-
+import           System.HSDM.PAM
 
 conversation :: [PamMessage] -> IO [PamResponse]
 conversation = undefined

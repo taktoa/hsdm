@@ -1,9 +1,9 @@
-hsdm: hsdm.hs PAM.hs
-	ghc hsdm.hs
+.PHONY: all clean
 
-pam_test: pam_test.hs PAM.hs
-	ghc pam_test.hs -lpam
+all: hsdm.nix
 
-install: hsdm
-	mkdir -pv ${out}/bin/
-	cp -vi hsdm ${out}/bin/
+clean:
+	-rm -f hsdm.nix &>/dev/null || true
+
+hsdm.nix: haskell/hsdm.cabal
+	nix-shell -p cabal2nix --run "cabal2nix ./haskell > hsdm.nix"

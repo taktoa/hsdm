@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE ViewPattern #-}
+{-# LANGUAGE ViewPatterns  #-}
 
-module Main where
+module System.HSDM where
 
 import           Control.Concurrent
 import           Control.Concurrent.MVar
@@ -128,7 +128,7 @@ childDead :: ProcessID -> MVar Bool -> SignalInfo -> IO ()
 childDead xpid mutex info = void $ do
   putStrLn "child process dead"
   case info of
-    (SignalInfo _ _ (sigInfoPid -> pid)) | xpid == pid -> putMVar mutex False
+    (SignalInfo _ _ (siginfoPid -> pid)) | xpid == pid -> putMVar mutex False
     _                                                  -> return ()
 
 startX :: ConfigFile -> IO GuiReturn -> IO ()
@@ -156,7 +156,7 @@ looper f pid mutex = go
             GuiStop    -> return ()
             GuiRestart -> do signalProcess sigHUP pid
                              whenM (takeMVar mutex) go
-                             
+
       --result <- takeMVar mutex
       --if result
       --  then looper f pid mutex

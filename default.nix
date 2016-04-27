@@ -2,7 +2,11 @@ let
   pkgs = import <nixpkgs> {};
   selfCP = pkgs.newScope self;
   self = rec {
-    hsdm = selfCP ./hsdm.nix {};
+    hsdm = pkgs.haskellPackages.callPackage ./hsdm.nix { inherit (pkgs) pam; };
+    hsdm-shell = pkgs.haskell.lib.overrideCabal hsdm (old: {
+                   librarySystemDepends = old.librarySystemDepends
+                                          ++ [ pkgs.pkgconfig ];
+                 });
     xorg2 = {
       inherit (pkgs.xorg) xwininfo xauth xprop xkeyboardconfig;
       xorgserver = pkgs.lib.overrideDerivation pkgs.xorg.xorgserver (old: {
@@ -18,8 +22,7 @@ let
     hsdm-config = selfCP ./hsdm-config.nix {};
     guest = (import <nixpkgs/nixos> {
       configuration = { lib, pkgs, ... }:
-      with lib;
-      {
+      with lib; {
         imports = [
            <nixpkgs/nixos/modules/virtualisation/qemu-vm.nix>
           ./hsdm-module.nix

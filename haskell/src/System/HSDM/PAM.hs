@@ -1,7 +1,7 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind -Wall #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 
-module PAM where
+module System.HSDM.PAM where
 
 import           Data.Monoid
 import           Foreign.C

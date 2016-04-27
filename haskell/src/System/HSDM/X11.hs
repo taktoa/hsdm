@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module Main where
+module System.HSDM.X11 where
 
 import qualified Codec.Picture.Png           as JP
 import qualified Codec.Picture.Types         as JP

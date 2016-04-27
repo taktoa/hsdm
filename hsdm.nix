@@ -1,12 +1,22 @@
-{ stdenv, haskellPackages, pam, enableDebugging }:
-
-with stdenv.lib;
-let
-  hsEnv = haskellPackages.ghcWithPackages (hsPkgs: with hsPkgs; [ X11 pam lens aeson colour rasterific-svg ]);
-  pathPartMatches = name: path: any (x: x == name) (splitString "/" path);
-in stdenv.mkDerivation {
-  name = "hsdm";
-  src = builtins.filterSource (path: type: !(pathPartMatches ".git" path || type == "symlink" || hasSuffix ".nix" path || hasSuffix ".swp" path || hasSuffix "nixos.qcow2" path)) ./.;
-
-  buildInputs = [ hsEnv (enableDebugging pam) ];
+{ mkDerivation, aeson, array, base, bytestring, colour
+, data-default, diagrams-lib, diagrams-rasterific, JuicyPixels
+, lens, mtl, pam, process, random, rasterific-svg, semigroups
+, stdenv, unix, X11
+}:
+mkDerivation {
+  pname = "hsdm";
+  version = "0.0.1";
+  src = ./haskell;
+  isLibrary = true;
+  isExecutable = true;
+  libraryHaskellDepends = [
+    aeson array base bytestring colour data-default diagrams-lib
+    diagrams-rasterific JuicyPixels lens mtl process random
+    rasterific-svg semigroups unix X11
+  ];
+  librarySystemDepends = [ pam ];
+  executableHaskellDepends = [ base ];
+  homepage = "https://github.com/taktoa/hsdm";
+  description = "A display manager, written in Haskell";
+  license = stdenv.lib.licenses.mit;
 }
