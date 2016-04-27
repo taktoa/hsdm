@@ -12,8 +12,9 @@ let
       "-nolisten" "tcp"
       "-depth" "24" ];
     sessiondir = "/nix/store/55y4angy2kl7lfk026yhw2ccfislb1dm-desktops";
-    login_cmd = "xterm";
+    #login_cmd = "xterm";
     #login_cmd = "env;xfce4-session";
+    login_cmd = "exec bash /nix/store/sbmm3fpgh5sgwhsaaq9k9v66xf8019nh-xsession xfce";
     display = ":1";
   });
 in

@@ -1,4 +1,4 @@
-{ stdenv, haskellPackages }:
+{ stdenv, haskellPackages, pam, enableDebugging }:
 
 with stdenv.lib;
 let
@@ -8,5 +8,5 @@ in stdenv.mkDerivation {
   name = "hsdm";
   src = builtins.filterSource (path: type: !(pathPartMatches ".git" path || type == "symlink" || hasSuffix ".nix" path || hasSuffix ".swp" path || hasSuffix "nixos.qcow2" path)) ./.;
 
-  buildInputs = [ hsEnv ];
+  buildInputs = [ hsEnv (enableDebugging pam) ];
 }

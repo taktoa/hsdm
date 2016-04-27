@@ -16,13 +16,14 @@ import           Foreign.C
 import           System.Environment
 import           System.Exit
 import           System.Posix.Directory
-import           System.Posix.PAM
+--import           System.Posix.PAM
 import           System.Posix.Process
 import           System.Posix.Signals
 import           System.Posix.Types
 import           System.Posix.User
 import           System.Process
 --import           Xwrap
+--import           PAM
 
 data ConfigFile = ConfigFile { default_xserver   :: FilePath
                              , xserver_arguments :: [String]
@@ -99,7 +100,7 @@ setRealEffectiveGroupID rgid egid = throwErrnoIfMinus1_ "setRealEffectiveGroupID
 foreign import ccall unsafe "setreuid" c_setreuid :: CUid -> CUid -> IO CInt
 foreign import ccall unsafe "setregid" c_setregid :: CGid -> CGid -> IO CInt
 
-pamtest :: String -> String -> IO ()
+{-pamtest :: String -> String -> IO ()
 pamtest username password = do
   foo <- authenticate "hsdm" username password
   case foo of
@@ -107,7 +108,7 @@ pamtest username password = do
     Right ()  -> do
       _ <- switchUser username
       return ()
-  return ()
+  return ()-}
 
 runner :: ConfigFile -> MVar Bool -> IO ()
 runner c mutex = do
