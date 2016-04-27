@@ -3,18 +3,19 @@
 
 module System.HSDM.PAM where
 
+import           Data.Bits
 import           Data.Monoid
 import           Foreign.C
 import           Foreign.Marshal.Alloc
 import           Foreign.Marshal.Array
 import           Foreign.Ptr
-import           Foreign.StablePtr
 import           Foreign.Storable
+import           System.HSDM.PAM.Internals
 
 -- the opaque void* from pam
 data CPamHandle = CPamHandle
 -- the handle returned to the app
-data PamHandle  = PamHandle (Ptr CPamHandle, FunPtr ConvFunc)
+data PamHandle  = PamHandle (Ptr CPamHandleT, FunPtr ConvFunc)
 
 data PamMessage = PamMessage { pamString :: String
                              , pamStyle  :: PamStyle }
@@ -22,49 +23,22 @@ data PamMessage = PamMessage { pamString :: String
 
 data PamResponse = PamResponse String deriving (Show, Eq)
 
-data CPamMessage = CPamMessage { messageStyle :: CInt
-                               , msg          :: CString }
-                 deriving (Show, Eq)
+data PAMReturnCode = PAM_SUCCESS | PAM_OPEN_ERR | PAM_SYMBOL_ERR | PAM_SERVICE_ERR | PAM_SYSTEM_ERR | PAM_BUF_ERR | PAM_PERM_DENIED | PAM_AUTH_ERR | PAM_CRED_INSUFFICIENT | PAM_AUTHINFO_UNAVAIL | PAM_USER_UNKNOWN | PAM_MAXTRIES | PAM_NEW_AUTHTOK_REQD deriving (Enum, Show, Eq)
+
+data PamCredFlags = PAM_ESTABLISH_CRED | PAM_DELETE_CRED | PAM_REINITIALIZE_CRED | PAM_REFRESH_CRED deriving (Enum, Show)
+
 data CPamResponse
 
 data PamStyle = PamPromptEchoOff
               | PamPromptEchoOn
               | PamErrorMsg | PamTextInfo deriving (Show, Eq)
-data PamRetCode = PamSuccess
-                | PamRetCode Int
-                deriving (Show, Eq)
-
-data CPamConv = CPamConv { conv        :: FunPtr ConvFunc
-                         , appdata_ptr :: Ptr () }
-
-instance Storable CPamConv where
-  alignment _ = alignment (undefined :: CDouble)
-  sizeOf _ = sizeOf (undefined :: FunPtr()) + sizeOf (undefined :: Ptr())
-  peek p = CPamConv <$> (peekByteOff p 0 :: IO (FunPtr ConvFunc))
-                    <*> (peekByteOff p 8 :: IO (Ptr ()))
-  poke p (CPamConv c ap) = do
-    (\ptr val -> pokeByteOff ptr 0 (val :: FunPtr ConvFunc)) p c
-    (\ptr val -> pokeByteOff ptr 8 (val :: Ptr ())) p ap
-
-instance Storable CPamMessage where
-  alignment _ = alignment (undefined :: CDouble)
-  sizeOf _ = sizeOf (undefined :: CInt) + sizeOf (undefined :: Ptr())
-  peek p = CPamMessage <$> (peekByteOff p 0 :: IO CInt)
-                       <*> (peekByteOff p 8 :: IO CString)
-  poke p (CPamMessage st msg) = do
-    (\ptr val -> do { pokeByteOff ptr 0 (val::CInt)}) p st
-    (\ptr val -> do { pokeByteOff ptr 8 (val::CString)}) p msg
-
 
 type PAMConv = [PamMessage] -> IO [PamResponse]
-
-type ConvFunc = CInt -> Ptr ( Ptr CPamMessage) -> Ptr ( Ptr ()) -> Ptr () -> IO CInt
-foreign import ccall "wrapper" mkconvFunc :: ConvFunc -> IO (FunPtr ConvFunc)
 
 messageFromC :: CPamMessage -> IO PamMessage
 messageFromC cmes = (\s -> PamMessage s style) <$> peekCString (msg cmes)
   where
-    style = case messageStyle cmes
+    style = case msg_style cmes
             of 1 -> PamPromptEchoOff
                2 -> PamPromptEchoOn
                3 -> PamErrorMsg
@@ -73,25 +47,38 @@ messageFromC cmes = (\s -> PamMessage s style) <$> peekCString (msg cmes)
 
 convWrapper :: PAMConv               -- A callback given by the user
             -> CInt                  -- Number of items in the array
-            -> Ptr (Ptr CPamMessage) -- Array of messages
+            -> Ptr (Ptr ())          -- Array of messages
             -> Ptr (Ptr ())          -- Responses going back out to PAM (?)
             -> Ptr ()                -- Pointer for application data (useless)
             -> IO CInt               -- Status code (0 indicates success)
 convWrapper _     c _    _    _  | c <= 0 = return 19 -- an error code?
-convWrapper userC c msgs resp dp          = do
-  putStrLn $ "in wrapper with " <> (show c)
+convWrapper userC c msgs resp _           = do
   p1 <- peek msgs
 
+  let mesArr = castPtr p1 :: Ptr CPamMessage
+
   -- turn input into array of pointers
-  cMessages <- peekArray (fromIntegral c) p1
-  print cMessages
+  cMessages <- peekArray (fromIntegral c) mesArr
 
   -- turn array of pointers into array of data's
   messages <- mapM messageFromC cMessages
-  print messages
-  return 0
 
-pamStart :: String -> String -> PAMConv -> IO (PamHandle,PamRetCode)
+  replies <- userC messages
+
+  cResponses <- mapM responseToC replies
+
+  respArr <- mallocArray $ fromIntegral c
+  pokeArray respArr cResponses
+
+  poke resp $ castPtr respArr
+
+  return 0
+  where
+    responseToC (PamResponse str) = do
+      resp' <- newCString str
+      return $ CPamResponse resp' 0
+
+pamStart :: String -> String -> PAMConv -> IO (PamHandle,PAMReturnCode)
 pamStart service user conv = do
   cService <- newCString service
   cUser <- newCString user
@@ -107,26 +94,36 @@ pamStart service user conv = do
   poke pamHandlePtr nullPtr
 
   r1 <- c_pam_start cService cUser convPtr pamHandlePtr
-  putStrLn $ "r1: " ++ (show r1)
 
   pamHandle <- peek pamHandlePtr
-  let
-    retCode = if (r1 == 0) then
-      PamSuccess
-    else
-      PamRetCode $ fromIntegral r1
-  return (PamHandle (pamHandle, wrapped), retCode)
+  return (PamHandle (pamHandle, wrapped), toEnum $ fromIntegral r1)
 
-pamAuthenticate :: PamHandle -> CInt -> IO (CInt)
+pamAuthenticate :: PamHandle -> CInt -> IO (PAMReturnCode)
 pamAuthenticate (PamHandle (hnd,_)) flags = do
   ret <- c_pam_authenticate hnd flags
-  return ret
+  return $ toEnum $ fromIntegral ret
 
-pamEnd :: PamHandle -> CInt -> IO (CInt)
+pamSetCred :: PamHandle -> (Bool,PamCredFlags) -> IO PAMReturnCode
+pamSetCred (PamHandle (hnd,_)) (silent, flag) = do
+  let flag' = case flag of
+        PAM_ESTABLISH_CRED -> 0x2
+        PAM_DELETE_CRED -> 0x4
+        PAM_REINITIALIZE_CRED -> 0x8
+        PAM_REFRESH_CRED -> 0x10
+  let silent' = if silent then 0x8000 else 0
+  ret <- c_pam_setcred hnd (flag' .|. silent')
+  return $ toEnum $ fromIntegral ret
+
+pamEnd :: PamHandle -> CInt -> IO PAMReturnCode
 pamEnd (PamHandle (hnd,_)) status = do
   ret <- c_pam_end hnd status
-  return ret
+  return $ toEnum $ fromIntegral ret
 
-foreign import ccall "pam_start" c_pam_start :: CString -> CString -> Ptr CPamConv -> Ptr (Ptr CPamHandle) -> IO CInt
-foreign import ccall "pam_authenticate" c_pam_authenticate :: Ptr CPamHandle -> CInt -> IO CInt
-foreign import ccall "pam_end" c_pam_end :: Ptr CPamHandle -> CInt -> IO CInt
+pamOpenSession :: PamHandle -> Bool -> IO PAMReturnCode
+pamOpenSession (PamHandle (hnd,_)) silent = do
+  ret <- c_pam_open_session hnd $ if silent then 0x8000 else 0
+  return $ toEnum $ fromIntegral ret
+pamCloseSession :: PamHandle -> Bool -> IO PAMReturnCode
+pamCloseSession (PamHandle (hnd,_)) silent = do
+  ret <- c_pam_close_session hnd $ if silent then 0x8000 else 0
+  return $ toEnum $ fromIntegral ret

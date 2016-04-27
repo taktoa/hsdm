@@ -3,28 +3,28 @@
 
 module System.HSDM where
 
+import           Control.Monad.Catch
 import           Control.Concurrent
 import           Control.Concurrent.MVar
-import           Control.Exception
 import           Control.Exception.Lens
 import           Control.Lens
 import           Control.Monad
 import           Data.Aeson
 import qualified Data.ByteString.Lazy.Char8 as LBSC
+import           Data.Monoid
 import           Foreign.C
 import           GHC.Generics
 import           Graphics.X11.Xlib
 import           System.Environment
 import           System.Exit
 import           System.Posix.Directory
---import           System.Posix.PAM
 import           System.Posix.Process
 import           System.Posix.Signals
 import           System.Posix.Types
 import           System.Posix.User
 import           System.Process
 --import           Xwrap
---import           PAM
+import           System.HSDM.PAM
 
 data ConfigFile = ConfigFile { default_xserver   :: FilePath
                              , xserver_arguments :: [String]
@@ -35,6 +35,9 @@ data ConfigFile = ConfigFile { default_xserver   :: FilePath
 instance FromJSON ConfigFile
 
 data GuiReturn = GuiStop | GuiRestart;
+
+data PAMException = PAMException {code :: PAMReturnCode, context :: String} deriving (Show)
+instance Exception PAMException
 
 oldMain :: IO ()
 oldMain = do
@@ -194,6 +197,16 @@ childProc username command dsp = do
   --return ()
 
 
+conversation :: [PamMessage] -> IO [PamResponse]
+conversation m = do
+  print m
+  results <- mapM go m
+  return results
+  where
+    go (PamMessage str style) = do
+      print str
+      print style
+      return $ PamResponse "test"
 
 -- FIXME: Write code for login prompt!
 -- `login' is a continuation that, when run, starts the login process
@@ -203,15 +216,44 @@ childProc username command dsp = do
 --
 -- loginPrompt should check the resulting 'ProcessStatus' and, if an error
 -- occurred, pop up an error message of some kind.
-loginPrompt :: (String -> IO ()) -> IO ()
-loginPrompt login = void $ login "test"
+loginPrompt :: (String -> IO ()) -> IO (Maybe GuiReturn)
+loginPrompt login = do
+  -- show login window, get username
+  let username = "test"
+  -- pass a reference to the gui to conversation so it can do pw query
+  ( handle, retcode) <- pamStart "slim" username conversation
+  f retcode
+  ret2 <- handleError handle `for` do
+    ret1 <- pamAuthenticate handle 0
+    f ret1
+    f =<< pamSetCred handle (False,PAM_ESTABLISH_CRED)
+    f =<< pamOpenSession handle False
+    login "test"
+    f =<< pamCloseSession handle False
+    f =<< pamSetCred handle (False,PAM_DELETE_CRED)
+    return $ Just GuiRestart
+  f =<< pamEnd handle 0
+  return ret2
+  where
+    f :: (MonadThrow m) => PAMReturnCode -> m()
+    f code = if code == PAM_SUCCESS
+      then return ()
+      else throwM $ PAMException code "fixme"
+    handleError :: PamHandle -> PAMException -> IO (Maybe a)
+    handleError hnd e = do
+      putStrLn ("caught:" <> show e)
+      ret <- pamEnd hnd 0
+      print ret
+      return Nothing
+    for h m = catch m h
 
 
 doGui :: ConfigFile -> IO GuiReturn
-doGui c = do putStrLn "gui starting"
-             loginPrompt $ sessionRunner c
-             putStrLn "gui stopping"
-             return GuiRestart
+doGui c = do
+  putStrLn "gui starting"
+  loginPrompt $ sessionRunner c
+  putStrLn "gui stopping"
+  return GuiRestart
 
 parse :: [String] -> IO (Maybe ConfigFile)
 parse ["-c", file] = decode <$> LBSC.readFile file
