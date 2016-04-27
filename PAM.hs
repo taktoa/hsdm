@@ -86,6 +86,7 @@ convWrapper userC c msgs resp dp          = do
 
   -- turn array of pointers into array of data's
   messages <- mapM messageFromC cMessages
+  print messages
   return 0
 
 pamStart :: String -> String -> PAMConv -> IO (PamHandle,PamRetCode)

@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ViewPattern #-}
 
 module Main where
 
@@ -10,9 +11,9 @@ import           Control.Lens
 import           Control.Monad
 import           Data.Aeson
 import qualified Data.ByteString.Lazy.Char8 as LBSC
+import           Foreign.C
 import           GHC.Generics
 import           Graphics.X11.Xlib
-import           Foreign.C
 import           System.Environment
 import           System.Exit
 import           System.Posix.Directory
@@ -124,14 +125,11 @@ serverup mutex = void $ do
   putMVar mutex True
 
 childDead :: ProcessID -> MVar Bool -> SignalInfo -> IO ()
-childDead xorgPid mutex info = void $ do
+childDead xpid mutex info = void $ do
   putStrLn "child process dead"
   case info of
-    SignalInfo sig err info -> do -- lens time?
-      if xorgPid == (siginfoPid info) then
-          putMVar mutex False
-        else
-          putStrLn "session quit"
+    (SignalInfo _ _ (sigInfoPid -> pid)) | xpid == pid -> putMVar mutex False
+    _                                                  -> return ()
 
 startX :: ConfigFile -> IO GuiReturn -> IO ()
 startX c f = do
@@ -146,18 +144,23 @@ startX c f = do
       signalProcess sigTERM pid
     else error "fixme1"
 
+whenM :: (Monad m) => m Bool -> m () -> m ()
+whenM c m = do b <- c
+               when b m
+
 looper :: IO GuiReturn -> ProcessID -> MVar Bool -> IO ()
-looper f pid mutex = do
-  status <- f
-  case status of
-    GuiStop -> return ()
-    GuiRestart -> do
-      signalProcess sigHUP pid
-      result <- takeMVar mutex
-      if result then
-          looper f pid mutex
-        else
-          error "fixme2"
+looper f pid mutex = go
+  where
+  go = do status <- f
+          case status of
+            GuiStop    -> return ()
+            GuiRestart -> do signalProcess sigHUP pid
+                             whenM (takeMVar mutex) go
+                             
+      --result <- takeMVar mutex
+      --if result
+      --  then looper f pid mutex
+      --  else error "fixme2"
 
 sessionRunner :: ConfigFile -> String -> IO ()
 sessionRunner c username = do
@@ -205,20 +208,18 @@ loginPrompt login = void $ login "test"
 
 
 doGui :: ConfigFile -> IO GuiReturn
-doGui c = do
-  putStrLn "gui starting"
-  loginPrompt $ sessionRunner c
-  putStrLn "gui stopping"
-  return GuiRestart
+doGui c = do putStrLn "gui starting"
+             loginPrompt $ sessionRunner c
+             putStrLn "gui stopping"
+             return GuiRestart
 
 parse :: [String] -> IO (Maybe ConfigFile)
 parse ["-c", file] = decode <$> LBSC.readFile file
-parse _            = usage >> exit
+parse _            = usage >> exitSuccess
 
 usage = do
   foo <- getProgName
   putStrLn $ "Usage: " ++ foo ++ " -c config_file"
-exit = exitWith ExitSuccess
 
 main :: IO ()
 main = do

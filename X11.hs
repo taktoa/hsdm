@@ -161,7 +161,7 @@ testDrawImage = do
   let while m n = m >>= (`when` (n >> while m n))
   forever $ do drawDia dpy win example1
                drawDia dpy win example2
-               threadDelay 1000000
+               --threadDelay 1000000
                while ((/= 0) <$> X.pending dpy)
                  $ X.allocaXEvent
                  $ \xev -> do X.nextEvent dpy xev
