@@ -41,12 +41,14 @@ library
     exposed-modules:      System.HSDM
                           System.HSDM.X11
                           System.HSDM.PAM
+                          System.HSDM.PAM.Internals
     extra-libraries:      pam
     ghc-options:          -Wall -O2 -threaded
                           -fno-warn-type-defaults
                           -fno-warn-unused-do-bind
     ghc-prof-options:     -auto-all -prof
     hs-source-dirs:       src
+    build-tools:          c2hs
 
 executable hsdm
     build-depends:        base == 4.*, hsdm

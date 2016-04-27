@@ -1,4 +1,4 @@
-{ mkDerivation, aeson, array, base, bytestring, colour
+{ mkDerivation, aeson, array, base, bytestring, c2hs, colour
 , data-default, diagrams-lib, diagrams-rasterific, JuicyPixels
 , lens, mtl, pam, process, random, rasterific-svg, semigroups
 , stdenv, unix, X11
@@ -15,6 +15,7 @@ mkDerivation {
     rasterific-svg semigroups unix X11
   ];
   librarySystemDepends = [ pam ];
+  libraryToolDepends = [ c2hs ];
   executableHaskellDepends = [ base ];
   homepage = "https://github.com/taktoa/hsdm";
   description = "A display manager, written in Haskell";

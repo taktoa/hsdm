@@ -27,28 +27,30 @@ data CPamMessage = CPamMessage { messageStyle :: CInt
                  deriving (Show, Eq)
 data CPamResponse
 
-data PamStyle = PamPromptEchoOff | PamPromptEchoOn | PamErrorMsg | PamTextInfo deriving (Show, Eq)
+data PamStyle = PamPromptEchoOff
+              | PamPromptEchoOn
+              | PamErrorMsg | PamTextInfo deriving (Show, Eq)
 data PamRetCode = PamSuccess
                 | PamRetCode Int
                 deriving (Show, Eq)
 
-data CPamConv = CPamConv {
-  conv          :: FunPtr ConvFunc
-  , appdata_ptr :: Ptr () }
+data CPamConv = CPamConv { conv        :: FunPtr ConvFunc
+                         , appdata_ptr :: Ptr () }
+
 instance Storable CPamConv where
   alignment _ = alignment (undefined :: CDouble)
   sizeOf _ = sizeOf (undefined :: FunPtr()) + sizeOf (undefined :: Ptr())
-  peek p = CPamConv <$> ((\ptr -> do { peekByteOff ptr 0 :: IO (FunPtr ConvFunc) }) p)
-                    <*> ((\ptr -> do { peekByteOff ptr 8 :: IO (Ptr ())}) p)
+  peek p = CPamConv <$> (peekByteOff p 0 :: IO (FunPtr ConvFunc))
+                    <*> (peekByteOff p 8 :: IO (Ptr ()))
   poke p (CPamConv c ap) = do
-    (\ptr val -> do { pokeByteOff ptr 0 (val::FunPtr ConvFunc)}) p c
-    (\ptr val -> do { pokeByteOff ptr 8 (val::(Ptr()))}) p ap
+    (\ptr val -> pokeByteOff ptr 0 (val :: FunPtr ConvFunc)) p c
+    (\ptr val -> pokeByteOff ptr 8 (val :: Ptr ())) p ap
 
 instance Storable CPamMessage where
   alignment _ = alignment (undefined :: CDouble)
   sizeOf _ = sizeOf (undefined :: CInt) + sizeOf (undefined :: Ptr())
-  peek p = CPamMessage <$> ((\ptr -> do { peekByteOff ptr 0 :: IO (CInt)}) p)
-                       <*> ((\ptr -> do { peekByteOff ptr 8 :: IO (CString)}) p)
+  peek p = CPamMessage <$> (peekByteOff p 0 :: IO CInt)
+                       <*> (peekByteOff p 8 :: IO CString)
   poke p (CPamMessage st msg) = do
     (\ptr val -> do { pokeByteOff ptr 0 (val::CInt)}) p st
     (\ptr val -> do { pokeByteOff ptr 8 (val::CString)}) p msg
