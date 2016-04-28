@@ -64,6 +64,7 @@ initGroups username group = do
   setGroups memberGroups
   return ()
 
+dumpIDs :: IO ()
 dumpIDs = do
   uid <- getRealUserID
   euid <- getEffectiveUserID
@@ -82,8 +83,8 @@ switchUser username = do
   setGroupID gid
   setUserID  uid
   dumpIDs
-  ( _, _, _, ph) <- createProcess $ shell "id"
-  code <- waitForProcess ph
+  --( _, _, _, ph) <- createProcess $ shell "id"
+  --code <- waitForProcess ph
   return entry
 
 restoreRoot :: IO ()
@@ -114,8 +115,8 @@ pamtest username password = do
       return ()
   return ()-}
 
-runner :: ConfigFile -> MVar Bool -> IO ()
-runner c mutex = do
+runner :: ConfigFile -> IO ()
+runner c = do
   let args = xserver_arguments c
   threadDelay 500000 -- FIXME
   installHandler sigUSR1 Ignore Nothing
@@ -138,7 +139,7 @@ startX :: ConfigFile -> IO GuiReturn -> IO ()
 startX c f = do
   mutex <- newEmptyMVar
   installHandler sigUSR1 (Catch $ serverup mutex) Nothing
-  pid <- forkProcess $ runner c mutex
+  pid <- forkProcess $ runner c
   installHandler sigCHLD (CatchInfo $ childDead pid mutex) Nothing
   result <- takeMVar mutex
   if result
@@ -167,13 +168,9 @@ looper f pid mutex = go
 
 sessionRunner :: ConfigFile -> String -> IO ()
 sessionRunner c username = do
-  -- pam_setcred(handle, PAM_ESTABLISH_CRED);
-  -- pam_open_session(handle, 0);
   pid <- forkProcess (childProc username (login_cmd c) (display c) )
   status <- getProcessStatus True False pid
   dumpIDs
-  -- pam_close_session(handle, 0);
-  -- pam_setcred(handle, PAM_DELETE_CRED);
   return ()
 
 childProc :: String -> String -> String -> IO ()
@@ -188,7 +185,7 @@ childProc username command dsp = do
             , ("XDG_RUNTIME_DIR", "/run/user/1100")
             , ("PATH","/run/current-system/sw/bin")
             , ("XDG_DATA_DIRS", "/run/current-system/sw/share") ]
-  let proc1 = CreateProcess cmd Nothing (Just env) Inherit Inherit Inherit True False False
+  --let proc1 = CreateProcess cmd Nothing (Just env) Inherit Inherit Inherit True False False
   changeWorkingDirectory $ homeDirectory entry
   executeFile "sh" True ["-c", command] (Just env)
   --(_, _, _, ph) <- createProcess proc1
@@ -204,8 +201,6 @@ conversation m = do
   return results
   where
     go (PamMessage str style) = do
-      print str
-      print style
       return $ PamResponse "test"
 
 -- FIXME: Write code for login prompt!
@@ -216,49 +211,53 @@ conversation m = do
 --
 -- loginPrompt should check the resulting 'ProcessStatus' and, if an error
 -- occurred, pop up an error message of some kind.
-loginPrompt :: (String -> IO ()) -> IO (Maybe GuiReturn)
+loginPrompt :: (String -> IO ()) -> IO GuiReturn
 loginPrompt login = do
   -- show login window, get username
   let username = "test"
   -- pass a reference to the gui to conversation so it can do pw query
-  ( handle, retcode) <- pamStart "slim" username conversation
+  (handle, retcode) <- pamStart "slim" username conversation
   f retcode
   ret2 <- handleError handle `for` do
+    print handle
     ret1 <- pamAuthenticate handle 0
     f ret1
     f =<< pamSetCred handle (False,PAM_ESTABLISH_CRED)
     f =<< pamOpenSession handle False
-    login "test"
+    login username
     f =<< pamCloseSession handle False
     f =<< pamSetCred handle (False,PAM_DELETE_CRED)
-    return $ Just GuiRestart
-  f =<< pamEnd handle 0
+    ret2 <- pamEnd handle 0
+    print ret2 -- check and log err?
+    return GuiRestart
   return ret2
   where
     f :: (MonadThrow m) => PAMReturnCode -> m()
-    f code = if code == PAM_SUCCESS
+    f ret = if ret == PAM_SUCCESS
       then return ()
-      else throwM $ PAMException code "fixme"
-    handleError :: PamHandle -> PAMException -> IO (Maybe a)
+      else throwM $ PAMException ret "fixme"
+    handleError :: PamHandle -> PAMException -> IO GuiReturn
     handleError hnd e = do
       putStrLn ("caught:" <> show e)
-      ret <- pamEnd hnd 0
+      print hnd
+      ret <- pamEnd hnd $ fromEnum $ code e
       print ret
-      return Nothing
+      return GuiStop
     for h m = catch m h
 
 
 doGui :: ConfigFile -> IO GuiReturn
 doGui c = do
   putStrLn "gui starting"
-  loginPrompt $ sessionRunner c
+  retcode <- loginPrompt $ sessionRunner c
   putStrLn "gui stopping"
-  return GuiRestart
+  return retcode
 
 parse :: [String] -> IO (Maybe ConfigFile)
 parse ["-c", file] = decode <$> LBSC.readFile file
 parse _            = usage >> exitSuccess
 
+usage :: IO()
 usage = do
   foo <- getProgName
   putStrLn $ "Usage: " ++ foo ++ " -c config_file"
@@ -275,6 +274,7 @@ main = do
 hack :: String -> IO (Maybe ConfigFile)
 hack file = decode <$> LBSC.readFile file
 
+{-
 uiTest :: String -> IO ()
 uiTest cfg = do
   config <- hack cfg
@@ -286,5 +286,6 @@ uiTest cfg = do
 
 uiTest2 :: ConfigFile -> IO GuiReturn
 uiTest2 c = do
-  --showWindow $ display c
+  showWindow $ display c
   return GuiStop
+-}

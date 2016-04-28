@@ -48,7 +48,7 @@ library
                           System.HSDM.PAM
                           System.HSDM.PAM.Internals
     extra-libraries:      pam
-    ghc-options:          -Wall -O2 -threaded
+    ghc-options:          -Wall -O2 -threaded -g
                           -fno-warn-type-defaults
                           -fno-warn-unused-do-bind
     ghc-prof-options:     -auto-all -prof
@@ -70,5 +70,5 @@ executable pam-test
 executable hsdm
     build-depends:        base == 4.*, hsdm
     default-language:     Haskell2010
-    ghc-options:          -Wall -O2 -threaded
+    ghc-options:          -Wall -O2 -threaded -g
     main-is:              src/Main.hs
