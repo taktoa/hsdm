@@ -42,26 +42,29 @@ import           System.Random
 type XDiagram = QDiagram Rasterific V2 Double Any
 
 main :: IO ()
-main = startX11Pipe def (generateDiagramPipe >-> renderDiagramPipe)
+main = startX11Pipe def testPipe
 
-generateDiagramPipe :: (Monad m) => Pipe X11Event XDiagram m ()
-generateDiagramPipe = go
+testPipe :: (P.MonadIO m) => Pipe X11Event X11Action m ()
+testPipe = go
   where
-    handleMotion :: (Monad m) => X11EventData d -> Pipe a XDiagram m ()
     handleMotion m = do
       let V2 x y = _X11Event_cpos m
-      let cursor = translate (V2 (fromIntegral x) (fromIntegral y))
-                   $ translate (V2 (-250) (-250))
+      let cursor = translate (V2 (fromIntegral x) (fromIntegral (negate y)))
+                   $ translate (V2 (-250) (250))
                    $ fc C.blue $ circle 5
-      P.yield $ cursor `atop` rect 500 500
-
+      P.yield $ ADraw $ renderRast $ cursor `atop` rect 500 500
     go = do
       event <- P.await
-      case event of MotionNotify m -> handleMotion m
+      --P.liftIO $ print event
+      case event of MotionNotify m -> handleMotion m >> go
+                    KeyPress k     -> let code = _X11Event_detail k
+                                      in if code == X.xK_Q
+                                         then P.yield AQuit
+                                         else P.liftIO (print event) >> go
                     _              -> go
 
-renderDiagramPipe :: (Monad m) => Pipe XDiagram X11Action m ()
-renderDiagramPipe = P.map (ADraw . renderDia Rasterific options)
+renderRast :: XDiagram -> JImage
+renderRast = renderDia Rasterific options
   where
     options = RasterificOptions (mkWidth 500)
 
@@ -85,39 +88,39 @@ startX11Pipe cfg pipe = do
 
 startX11 :: X11Config -> IO (Async (), Output X11Action, Input X11Event)
 startX11 cfg = do
-  --(outputAction, inputAction) <- spawn $ newest $ _queueSize cfg
-  --(outputEvent,  inputEvent)  <- spawn $ newest $ _queueSize cfg
-  (outputAction, inputAction) <- spawn $ bounded 128 --  $ _queueSize cfg
-  (outputEvent,  inputEvent)  <- spawn $ bounded 128 --  $ _queueSize cfg
+  (outputAction, inputAction) <- spawn $ newest 1
+  (outputEvent,  inputEvent)  <- spawn $ newest 1
   thread <- async $ do
     dpy <- X.openDisplay ""
     -- FIXME: should cover whole screen
     win <- mkUnmanagedWindow dpy 1000 400 500 500
     initializeX11Events dpy win
     X.mapWindow dpy win
+    let waitX11 = X.waitForEvent dpy 1000000000
     let pollX11 = getPendingX11Events dpy >>= sendAll outputEvent
-    let loop = do pollX11
+    let loop = do waitX11
+                  pollX11
                   action <- atomically $ recv inputAction
                   case action
                     of Just (ADraw i) -> drawJPImage dpy win i >> loop
                        Just APoll     -> pollX11               >> loop
                        Just AQuit     -> X.closeDisplay dpy
                        Nothing        -> loop
-                  performGC
     pollX11
     loop
+    performGC
   return (thread, outputAction, inputEvent)
 
 sendAll :: Output a -> [a] -> IO ()
-sendAll out = atomically . go
+sendAll out = go
   where
     go []     = return ()
-    go (x:xs) = send out x >> go xs
+    go (x:xs) = atomically (send out x) >> go xs
 
 type X11Position = V2 Int
 
-type X11Button  = X.Button
-type X11KeyCode = X.KeyCode
+type X11Button = X.Button
+type X11KeySym = X.KeySym
 
 data X11Mask = MShift
              | MLock
@@ -147,8 +150,8 @@ data X11EventData d = X11EventData { _X11Event_root     :: !X.Window
                                    }
                     deriving (Eq, Show)
 
-data X11Event = KeyPress      !(X11EventData X11KeyCode)
-              | KeyRelease    !(X11EventData X11KeyCode)
+data X11Event = KeyPress      !(X11EventData X11KeySym)
+              | KeyRelease    !(X11EventData X11KeySym)
               | ButtonPress   !(X11EventData X11Button)
               | ButtonRelease !(X11EventData X11Button)
               | MotionNotify  !(X11EventData ())
@@ -158,8 +161,8 @@ type XEventTuple d = ( X.Window, X.Window, X.Time
                      , CInt, CInt, CInt, CInt
                      , X.Modifier, d, Bool )
 
-makeX11Event :: X.XEventPtr -> IO (Maybe X11Event)
-makeX11Event xev = X.get_EventType xev >>= go
+makeX11Event :: Display -> X.XEventPtr -> IO (Maybe X11Event)
+makeX11Event dpy xev = X.get_EventType xev >>= go
   where
     go e | e == X.keyPress      = pure . KeyPress      <$> makeKeyEvent
     go e | e == X.keyRelease    = pure . KeyRelease    <$> makeKeyEvent
@@ -168,17 +171,19 @@ makeX11Event xev = X.get_EventType xev >>= go
     go e | e == X.motionNotify  = pure . MotionNotify  <$> makeMotionEvent
     go _                        = return Nothing
 
-    makeKeyEvent    = makeEvent X.get_KeyEvent id
-    makeMouseEvent  = makeEvent X.get_ButtonEvent id
-    makeMotionEvent = makeEvent X.get_MotionEvent (const ())
+    makeKeyEvent    = makeEvent X.get_KeyEvent    convertKey
+    makeMouseEvent  = makeEvent X.get_ButtonEvent return
+    makeMotionEvent = makeEvent X.get_MotionEvent (const (return ()))
+
+    convertKey k = X.keycodeToKeysym dpy k 0
 
     makeEvent :: (X.XEventPtr -> IO (XEventTuple t))
-              -> (t -> d) -> IO (X11EventData d)
+              -> (t -> IO d) -> IO (X11EventData d)
     makeEvent getter f = do
       (rw, cw, time, cx, cy, rx, ry, m, d, _) <- getter xev
       let cpos = V2 (fromIntegral cx) (fromIntegral cy)
       let rpos = V2 (fromIntegral rx) (fromIntegral ry)
-      return $ X11EventData rw cw time cpos rpos (makeModifier m) (f d)
+      X11EventData rw cw time cpos rpos (makeModifier m) <$> f d
 
 makeModifier :: X.Modifier -> X11Modifier
 makeModifier xmod = X11Modifier
@@ -233,7 +238,7 @@ getPendingX11Events dpy = X.allocaXEvent $ flip go []
                      then return es
                      else getEvent xev >>= go xev . (<> es) . toList
     getEvent :: X.XEventPtr -> IO (Maybe X11Event)
-    getEvent xev = X.nextEvent dpy xev >> makeX11Event xev
+    getEvent xev = X.nextEvent dpy xev >> makeX11Event dpy xev
 
 type JImage = JP.Image JP.PixelRGBA8
 
@@ -332,7 +337,7 @@ mkUnmanagedWindow dpy x y w h = do
   rw <- X.rootWindow dpy (X.defaultScreen dpy)
   let visual = X.defaultVisualOfScreen scr
   let depth  = X.defaultDepthOfScreen scr
-  --let attrmask = X.cWOverrideRedirect .|. X.cWBorderPixel .|. X.cWBackPixel
+  let attrmask = X.cWOverrideRedirect .|. X.cWBorderPixel .|. X.cWBackPixel
   backgroundColor <- initColor dpy "black"
   borderColor     <- initColor dpy "green"
   --X.allocaSetWindowAttributes $ \attrs -> do
