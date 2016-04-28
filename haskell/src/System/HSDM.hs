@@ -125,7 +125,7 @@ runner c = do
 
 serverup :: MVar Bool -> IO ()
 serverup mutex = void $ do
-  putStrLn "got user1"
+  putStrLn "got usr1"
   putMVar mutex True
 
 childDead :: ProcessID -> MVar Bool -> SignalInfo -> IO ()
@@ -176,7 +176,6 @@ sessionRunner c username = do
 childProc :: String -> String -> String -> IO ()
 childProc username command dsp = do
   entry <- switchUser username
-  let cmd = ShellCommand $ command
   let env = [ ("DISPLAY", dsp)
             , ("HOME", homeDirectory entry)
             , ("USER", username)
@@ -185,13 +184,10 @@ childProc username command dsp = do
             , ("XDG_RUNTIME_DIR", "/run/user/1100")
             , ("PATH","/run/current-system/sw/bin")
             , ("XDG_DATA_DIRS", "/run/current-system/sw/share") ]
-  --let proc1 = CreateProcess cmd Nothing (Just env) Inherit Inherit Inherit True False False
+  print =<< getEnvironment
+  setEnv "PATH" "/run/current-system/sw/bin"
   changeWorkingDirectory $ homeDirectory entry
   executeFile "sh" True ["-c", command] (Just env)
-  --(_, _, _, ph) <- createProcess proc1
-  --status <- waitForProcess ph
-  --print status
-  --return ()
 
 
 conversation :: [PamMessage] -> IO [PamResponse]
@@ -200,7 +196,7 @@ conversation m = do
   results <- mapM go m
   return results
   where
-    go (PamMessage str style) = do
+    go (PamMessage _ _) = do
       return $ PamResponse "test"
 
 -- FIXME: Write code for login prompt!
@@ -211,25 +207,26 @@ conversation m = do
 --
 -- loginPrompt should check the resulting 'ProcessStatus' and, if an error
 -- occurred, pop up an error message of some kind.
-loginPrompt :: (String -> IO ()) -> IO GuiReturn
-loginPrompt login = do
+loginPrompt :: ConfigFile -> (ConfigFile -> String -> IO ()) -> IO GuiReturn
+loginPrompt c login = do
   -- show login window, get username
   let username = "test"
   -- pass a reference to the gui to conversation so it can do pw query
-  (handle, retcode) <- pamStart "slim" username conversation
+  (hnd, retcode) <- pamStart "hsdm" username conversation
   f retcode
-  ret2 <- handleError handle `for` do
-    print handle
-    ret1 <- pamAuthenticate handle 0
+  ret2 <- handleError hnd `for` do
+    print hnd
+    f =<< (pamSetItem hnd $ PAM_TTY $ display c)
+    ret1 <- pamAuthenticate hnd 0
     f ret1
-    f =<< pamSetCred handle (False,PAM_ESTABLISH_CRED)
-    f =<< pamOpenSession handle False
-    login username
-    f =<< pamCloseSession handle False
-    f =<< pamSetCred handle (False,PAM_DELETE_CRED)
-    ret2 <- pamEnd handle 0
+    f =<< pamSetCred hnd (False,PAM_ESTABLISH_CRED)
+    f =<< pamOpenSession hnd False
+    login c username
+    f =<< pamCloseSession hnd False
+    f =<< pamSetCred hnd (False,PAM_DELETE_CRED)
+    ret2 <- pamEnd hnd 0
     print ret2 -- check and log err?
-    return GuiRestart
+    return GuiStop
   return ret2
   where
     f :: (MonadThrow m) => PAMReturnCode -> m()
@@ -249,7 +246,8 @@ loginPrompt login = do
 doGui :: ConfigFile -> IO GuiReturn
 doGui c = do
   putStrLn "gui starting"
-  retcode <- loginPrompt $ sessionRunner c
+  hFlush stdout
+  retcode <- loginPrompt c $ sessionRunner
   putStrLn "gui stopping"
   return retcode
 
