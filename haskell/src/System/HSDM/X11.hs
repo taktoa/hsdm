@@ -6,6 +6,7 @@ module System.HSDM.X11 where
 import qualified Codec.Picture.Png           as JP
 import qualified Codec.Picture.Types         as JP
 import           Control.Concurrent
+import           Control.Concurrent.Async
 import           Control.Lens
 import           Control.Monad
 import           Data.Array.Storable
@@ -14,6 +15,7 @@ import           Data.ByteString             (ByteString, useAsCString)
 import qualified Data.ByteString             as BS
 import qualified Data.Colour.Names           as C
 import           Data.Default
+import           Data.Foldable               (toList)
 import           Data.Int
 import           Data.Maybe
 import           Data.Semigroup
@@ -29,39 +31,88 @@ import           Foreign.C.String            (CString)
 import           Graphics.Rasterific.Svg
 import qualified Graphics.X11.Xlib           as X
 import qualified Graphics.X11.Xlib.Extras    as X
+import           Pipes                       (Pipe, (>->))
+import qualified Pipes                       as P
+import           Pipes.Concurrent
+import qualified Pipes.Prelude               as P
 import           System.Exit
 import           System.IO
 import           System.Random
 
-main :: IO ()
-main = testDrawImage
-
-type Pos = X.Position
-type Dim = X.Dimension
-type Image = X.Image
-type Screen = X.Screen
-type Window = X.Window
-type Display = X.Display
-
-type XImageArray = StorableArray (Int, Int, Int) Word8
-
-data XImg = XImg { xImage     :: X.Image
-                 , xImageData :: XImageArray
-                 , xImageH    :: Int
-                 , xImageW    :: Int
-                 }
-
 type XDiagram = QDiagram Rasterific V2 Double Any
 
-drawDia :: Display -> Window -> XDiagram -> IO ()
-drawDia dpy win = drawJPImage dpy win
-                  . renderDia Rasterific options
+main :: IO ()
+main = startX11Pipe def (generateDiagramPipe >-> renderDiagramPipe)
+
+generateDiagramPipe :: (Monad m) => Pipe X11Event XDiagram m ()
+generateDiagramPipe = go
+  where
+    handleMotion :: (Monad m) => X11EventData d -> Pipe a XDiagram m ()
+    handleMotion m = do
+      let V2 x y = _X11Event_cpos m
+      let cursor = translate (V2 (fromIntegral x) (fromIntegral y))
+                   $ translate (V2 (-250) (-250))
+                   $ fc C.blue $ circle 5
+      P.yield $ cursor `atop` rect 500 500
+
+    go = do
+      event <- P.await
+      case event of MotionNotify m -> handleMotion m
+                    _              -> go
+
+renderDiagramPipe :: (Monad m) => Pipe XDiagram X11Action m ()
+renderDiagramPipe = P.map (ADraw . renderDia Rasterific options)
   where
     options = RasterificOptions (mkWidth 500)
 
-example1, example2 :: XDiagram
-example1 = fc C.blue (circle 3) ||| fc C.red  (rect 5 8)
-example2 = fc C.red  (circle 3) ||| fc C.blue (rect 5 8)
+data X11Action = ADraw !JImage
+               | APoll
+               | AQuit
+
+data X11Config = X11Config { _queueSize :: Int }
+               deriving (Eq, Read, Show)
+
+instance Default X11Config where
+  def = X11Config { _queueSize = 256 }
+
+startX11Pipe :: X11Config -> Pipe X11Event X11Action IO () -> IO ()
+startX11Pipe cfg pipe = do
+  (environmentThread, outputX, inputX) <- startX11 cfg
+  let producer = fromInput inputX
+  let consumer = toOutput outputX
+  P.runEffect $ producer >-> pipe >-> consumer
+  wait environmentThread
+
+startX11 :: X11Config -> IO (Async (), Output X11Action, Input X11Event)
+startX11 cfg = do
+  --(outputAction, inputAction) <- spawn $ newest $ _queueSize cfg
+  --(outputEvent,  inputEvent)  <- spawn $ newest $ _queueSize cfg
+  (outputAction, inputAction) <- spawn $ bounded 128 --  $ _queueSize cfg
+  (outputEvent,  inputEvent)  <- spawn $ bounded 128 --  $ _queueSize cfg
+  thread <- async $ do
+    dpy <- X.openDisplay ""
+    -- FIXME: should cover whole screen
+    win <- mkUnmanagedWindow dpy 1000 400 500 500
+    initializeX11Events dpy win
+    X.mapWindow dpy win
+    let pollX11 = getPendingX11Events dpy >>= sendAll outputEvent
+    let loop = do pollX11
+                  action <- atomically $ recv inputAction
+                  case action
+                    of Just (ADraw i) -> drawJPImage dpy win i >> loop
+                       Just APoll     -> pollX11               >> loop
+                       Just AQuit     -> X.closeDisplay dpy
+                       Nothing        -> loop
+                  performGC
+    pollX11
+    loop
+  return (thread, outputAction, inputEvent)
+
+sendAll :: Output a -> [a] -> IO ()
+sendAll out = atomically . go
+  where
+    go []     = return ()
+    go (x:xs) = send out x >> go xs
 
 type X11Position = V2 Int
 
@@ -130,57 +181,61 @@ makeX11Event xev = X.get_EventType xev >>= go
       return $ X11EventData rw cw time cpos rpos (makeModifier m) (f d)
 
 makeModifier :: X.Modifier -> X11Modifier
-makeModifier mod = X11Modifier
-                   $ helper X.shiftMask   MShift
-                   $ helper X.lockMask    MLock
-                   $ helper X.controlMask MControl
-                   $ helper X.mod1Mask    MMod1
-                   $ helper X.mod2Mask    MMod2
-                   $ helper X.mod3Mask    MMod3
-                   $ helper X.mod4Mask    MMod4
-                   $ helper X.mod5Mask    MMod5
-                   $ helper X.button1Mask MButton1
-                   $ helper X.button2Mask MButton2
-                   $ helper X.button3Mask MButton3
-                   $ helper X.button4Mask MButton4
-                   $ helper X.button5Mask MButton5
-                   $ mempty
+makeModifier xmod = X11Modifier
+                    $ check X.shiftMask   MShift
+                    $ check X.lockMask    MLock
+                    $ check X.controlMask MControl
+                    $ check X.mod1Mask    MMod1
+                    $ check X.mod2Mask    MMod2
+                    $ check X.mod3Mask    MMod3
+                    $ check X.mod4Mask    MMod4
+                    $ check X.mod5Mask    MMod5
+                    $ check X.button1Mask MButton1
+                    $ check X.button2Mask MButton2
+                    $ check X.button3Mask MButton3
+                    $ check X.button4Mask MButton4
+                    $ check X.button5Mask MButton5 mempty
   where
-    helper :: X.Modifier -> X11Mask -> Set X11Mask -> Set X11Mask
-    helper m e s | m ∈ mod = Set.insert e s
-    helper _ _ s           = s
+    check :: X.Modifier -> X11Mask -> Set X11Mask -> Set X11Mask
+    check m e s | m ∈ xmod = Set.insert e s
+    check _ _ s            = s
     a ∈ b = (a .&. complement b) == 0
 
-testDrawImage :: IO ()
-testDrawImage = do
-  --edimg <- JP.decodePng <$> BS.readFile file
-  --case edimg of
-  --  Left  err  -> putStrLn err
-  --  Right dimg -> do
-  dpy <- X.openDisplay ""
-  win <- mkUnmanagedWindow dpy 1000 400 500 500
-  let foldMask = foldr (.|.) 0
-  X.selectInput dpy win $ foldMask $ [ X.exposureMask
-                                     , X.keyPressMask
-                                     , X.keyReleaseMask
-                                     , X.buttonPressMask
-                                     , X.buttonReleaseMask
-                                     , X.pointerMotionMask ]
+type Pos = X.Position
+type Dim = X.Dimension
+type Image = X.Image
+type Screen = X.Screen
+type Window = X.Window
+type Display = X.Display
 
-  X.mapWindow dpy win
-  let while m n = m >>= (`when` (n >> while m n))
-  forever $ do drawDia dpy win example1
-               drawDia dpy win example2
-               --threadDelay 1000000
-               while ((/= 0) <$> X.pending dpy)
-                 $ X.allocaXEvent
-                 $ \xev -> do X.nextEvent dpy xev
-                              makeX11Event xev >>= print
-                              --X.get_EventType xev >>= print . convEventType
-               X.pending dpy >>= print
-  --drawDia dpy win $ circle 5 ||| rect 10 8
-  _ <- getLine
-  X.closeDisplay dpy
+type XImageArray = StorableArray (Int, Int, Int) Word8
+
+data XImg = XImg { xImage     :: X.Image
+                 , xImageData :: XImageArray
+                 , xImageH    :: Int
+                 , xImageW    :: Int
+                 }
+
+initializeX11Events :: Display -> Window -> IO ()
+initializeX11Events dpy win = X.selectInput dpy win $ foldr (.|.) 0 masks
+  where
+    masks = [ X.keyPressMask
+            , X.keyReleaseMask
+            , X.buttonPressMask
+            , X.buttonReleaseMask
+            , X.pointerMotionMask ]
+
+getPendingX11Events :: Display -> IO [X11Event]
+getPendingX11Events dpy = X.allocaXEvent $ flip go []
+  where
+    go xev es = do p <- X.pending dpy
+                   if p == 0
+                     then return es
+                     else getEvent xev >>= go xev . (<> es) . toList
+    getEvent :: X.XEventPtr -> IO (Maybe X11Event)
+    getEvent xev = X.nextEvent dpy xev >> makeX11Event xev
+
+type JImage = JP.Image JP.PixelRGBA8
 
 drawImg :: X.Display -> X.Window -> XImg -> IO ()
 drawImg dpy win ximg = do
@@ -195,7 +250,7 @@ initColor dpy color = do
   (apros, _) <- X.allocNamedColor dpy colormap color
   return $ X.color_pixel apros
 
-fromJPData :: JP.Image JP.PixelRGBA8 -> IO XImageArray
+fromJPData :: JImage -> IO XImageArray
 fromJPData img = newArray ((0, 0, 0), (h - 1, w - 1, 3)) 0 >>= setValues
   where
     w = JP.imageWidth  img
@@ -215,7 +270,7 @@ fromJPData img = newArray ((0, 0, 0), (h - 1, w - 1, 3)) 0 >>= setValues
         go ((y, x, c):xs) = do writeArray arr (y, x, c) $! getC c $! getPix x y
                                go xs
 
-makeXImage :: X.Display -> JP.Image JP.PixelRGBA8 -> IO XImg
+makeXImage :: X.Display -> JImage -> IO XImg
 makeXImage dpy image = do d <- fromJPData image
                           xid <- mapIndices bs mapIdx d
                           withStorableArray xid (ci xid . castPtr)
@@ -236,10 +291,10 @@ makeXImage dpy image = do d <- fromJPData image
                            helper 3 = 0
                        in (y, x, helper c)
 
-drawJPImage :: X.Display -> X.Window -> JP.Image JP.PixelRGBA8 -> IO ()
+drawJPImage :: X.Display -> X.Window -> JImage -> IO ()
 drawJPImage dpy win image = makeXImage dpy image >>= drawImg dpy win
 
-convertDynImage :: JP.DynamicImage -> Maybe (JP.Image JP.PixelRGBA8)
+convertDynImage :: JP.DynamicImage -> Maybe JImage
 convertDynImage (JP.ImageY8     img) = Just $ JP.promoteImage img
 convertDynImage (JP.ImageYA8    img) = Just $ JP.promoteImage img
 convertDynImage (JP.ImageRGB8   img) = Just $ JP.promoteImage img
