@@ -3,12 +3,12 @@
 
 module System.HSDM where
 
-import           Control.Monad.Catch
 import           Control.Concurrent
 import           Control.Concurrent.MVar
 import           Control.Exception.Lens
 import           Control.Lens
 import           Control.Monad
+import           Control.Monad.Catch
 import           Data.Aeson
 import qualified Data.ByteString.Lazy.Char8 as LBSC
 import           Data.Monoid
@@ -25,6 +25,7 @@ import           System.Posix.User
 import           System.Process
 --import           Xwrap
 import           System.HSDM.PAM
+import           System.IO                  (hFlush, stdout)
 
 data ConfigFile = ConfigFile { default_xserver   :: FilePath
                              , xserver_arguments :: [String]
