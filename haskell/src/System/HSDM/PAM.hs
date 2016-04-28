@@ -68,8 +68,7 @@ convWrapper userC c msgs resp _           = do
 
   cResponses <- mapM responseToC replies
 
-  respArr <- mallocArray $ fromIntegral c
-  pokeArray respArr cResponses
+  respArr <- newArray cResponses
 
   poke resp $ castPtr respArr
 

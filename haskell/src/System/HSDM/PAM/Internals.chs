@@ -14,7 +14,7 @@ data CPamMessage = CPamMessage { msg_style :: CInt
 
 instance Storable CPamMessage where
     alignment _ = alignment (undefined :: CDouble)
-    sizeOf _ = sizeOf (undefined :: CInt) + sizeOf (undefined :: CString)
+    sizeOf _ = {# sizeof pam_message #}
     peek p = CPamMessage <$> ({#get pam_message.msg_style #} p)
                          <*> ({#get pam_message.msg #} p)
     poke p (CPamMessage ms m) = do
@@ -28,7 +28,7 @@ data CPamResponse = CPamResponse { resp :: CString
 
 instance Storable CPamResponse where
     alignment _ = alignment (undefined :: CDouble)
-    sizeOf _ = sizeOf (undefined :: CString) + sizeOf (undefined :: CInt)
+    sizeOf _ = {# sizeof pam_response #}
     peek p = CPamResponse <$> ({#get pam_response.resp #} p)
                           <*> ({#get pam_response.resp_retcode #} p)
     poke p (CPamResponse r rc) = do
@@ -43,7 +43,7 @@ foreign import ccall "wrapper" mkconvFunc :: ConvFunc -> IO (FunPtr ConvFunc)
 
 instance Storable CPamConv where
     alignment _ = alignment (undefined :: CDouble)
-    sizeOf _ = sizeOf (undefined :: FunPtr ()) + sizeOf (undefined :: Ptr ())
+    sizeOf _ = {# sizeof pam_conv #}
     peek p = CPamConv <$> ({#get pam_conv.conv #} p)
                       <*> ({#get pam_conv.appdata_ptr #} p)
     poke p (CPamConv c ap) = do
@@ -55,7 +55,7 @@ type CPamHandleT = ()
 foreign import ccall "security/pam_appl.h pam_start"         c_pam_start
   :: CString -> CString -> Ptr CPamConv -> Ptr (Ptr CPamHandleT) -> IO CInt
 foreign import ccall "security/pam_appl.h pam_authenticate"  c_pam_authenticate
-  :: Ptr CPamHandleT -> CInt -> IO CInt
+  :: {# type pam_handle_t #} -> CInt -> IO CInt
 foreign import ccall "security/pam_appl.h pam_setcred"       c_pam_setcred
   :: Ptr CPamHandleT -> CInt -> IO CInt
 foreign import ccall "security/pam_appl.h pam_acct_mgmt"     c_pam_acct_mgmt
