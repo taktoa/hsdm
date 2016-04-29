@@ -7,10 +7,11 @@ let
     xserver_arguments = [
       "-display" ":0" display
       "-xkbdir" "${xorg.xkeyboardconfig}/etc/X11/xkb"
-      "-geometry" "800x600"
+      "-geometry" "1024x768"
       "-fp" "${xorg.fontmiscmisc}/lib/X11/fonts/misc,${xorg.fontcursormisc}/lib/X11/fonts/misc"
-      "-nolisten" "tcp"
-      "-depth" "24" ];
+      #"-nolisten" "tcp"
+      "-depth" "24"
+      "-auth" "/tmp/hsdm.auth" ];
     sessiondir = "/nix/store/55y4angy2kl7lfk026yhw2ccfislb1dm-desktops";
     #login_cmd = "xterm";
     #login_cmd = "env;xfce4-session";

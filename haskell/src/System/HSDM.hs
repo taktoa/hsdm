@@ -4,9 +4,9 @@
 module System.HSDM where
 
 import           Control.Concurrent
-import           Control.Concurrent.MVar
-import           Control.Exception.Lens
-import           Control.Lens
+--import           Control.Concurrent.MVar
+--import           Control.Exception.Lens
+--import           Control.Lens
 import           Control.Monad
 import           Control.Monad.Catch
 import           Data.Aeson
@@ -14,7 +14,7 @@ import qualified Data.ByteString.Lazy.Char8 as LBSC
 import           Data.Monoid
 import           Foreign.C
 import           GHC.Generics
-import           Graphics.X11.Xlib
+--import           Graphics.X11.Xlib
 import           System.Environment
 import           System.Exit
 import           System.Posix.Directory
@@ -22,10 +22,10 @@ import           System.Posix.Process
 import           System.Posix.Signals
 import           System.Posix.Types
 import           System.Posix.User
-import           System.Process
---import           Xwrap
+--import           System.Process
 import           System.HSDM.PAM
 import           System.IO                  (hFlush, stdout)
+import qualified System.HSDM.X11
 
 data ConfigFile = ConfigFile { default_xserver   :: FilePath
                              , xserver_arguments :: [String]
@@ -40,7 +40,7 @@ data GuiReturn = GuiStop | GuiRestart;
 data PAMException = PAMException {code :: PAMReturnCode, context :: String} deriving (Show)
 instance Exception PAMException
 
-oldMain :: IO ()
+{-oldMain :: IO ()
 oldMain = do
   display <- openDisplay ""
   print display
@@ -54,7 +54,7 @@ oldMain = do
   print root
   getLine >>= putStrLn
   closeDisplay display
-  return ()
+  return ()-}
 
 initGroups :: String -> GroupID -> IO ()
 initGroups username group = do
@@ -167,17 +167,18 @@ looper f pid mutex = go
       --  then looper f pid mutex
       --  else error "fixme2"
 
-sessionRunner :: ConfigFile -> String -> IO ()
-sessionRunner c username = do
-  pid <- forkProcess (childProc username (login_cmd c) (display c) )
+sessionRunner :: ConfigFile -> String -> [(String,String)] -> IO ()
+sessionRunner c username env = do
+  pid <- forkProcess (childProc username (login_cmd c) (display c) env )
   status <- getProcessStatus True False pid
   dumpIDs
   return ()
 
-childProc :: String -> String -> String -> IO ()
-childProc username command dsp = do
+childProc :: String -> String -> String -> [(String,String)] -> IO ()
+childProc username command dsp env1 = do
   entry <- switchUser username
-  let env = [ ("DISPLAY", dsp)
+  print env1
+  let env2 = [ ("DISPLAY", dsp)
             , ("HOME", homeDirectory entry)
             , ("USER", username)
             , ("LOGNAME", username)
@@ -185,15 +186,17 @@ childProc username command dsp = do
             , ("XDG_RUNTIME_DIR", "/run/user/1100")
             , ("PATH","/run/current-system/sw/bin")
             , ("XDG_DATA_DIRS", "/run/current-system/sw/share") ]
+  let env3 = env1 <> env2
+  print env3
   print =<< getEnvironment
   setEnv "PATH" "/run/current-system/sw/bin"
   changeWorkingDirectory $ homeDirectory entry
-  executeFile "sh" True ["-c", command] (Just env)
+  hFlush stdout
+  executeFile "sh" True ["-c", command] (Just env2)
 
 
 conversation :: [PamMessage] -> IO [PamResponse]
 conversation m = do
-  print m
   results <- mapM go m
   return results
   where
@@ -208,7 +211,7 @@ conversation m = do
 --
 -- loginPrompt should check the resulting 'ProcessStatus' and, if an error
 -- occurred, pop up an error message of some kind.
-loginPrompt :: ConfigFile -> (ConfigFile -> String -> IO ()) -> IO GuiReturn
+loginPrompt :: ConfigFile -> (ConfigFile -> String -> [(String,String)] -> IO ()) -> IO GuiReturn
 loginPrompt c login = do
   -- show login window, get username
   let username = "test"
@@ -222,7 +225,8 @@ loginPrompt c login = do
     f ret1
     f =<< pamSetCred hnd (False,PAM_ESTABLISH_CRED)
     f =<< pamOpenSession hnd False
-    login c username
+    env <- pamGetEnvList hnd
+    login c username env
     f =<< pamCloseSession hnd False
     f =<< pamSetCred hnd (False,PAM_DELETE_CRED)
     ret2 <- pamEnd hnd 0

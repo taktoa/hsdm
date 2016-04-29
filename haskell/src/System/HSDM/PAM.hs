@@ -5,6 +5,10 @@ module System.HSDM.PAM where
 
 import           Data.Bits
 import           Data.Monoid
+import           Data.List.Split
+import           Data.List
+import           Control.Concurrent
+import           Control.Exception
 import           Foreign.C
 import           Foreign.Marshal.Alloc
 import           Foreign.Marshal.Array
@@ -12,6 +16,7 @@ import           Foreign.Ptr
 import           Foreign.Storable
 import           System.HSDM.PAM.Internals
 import           System.IO
+import           System.Posix.Signals
 
 -- the opaque void* from pam
 data CPamHandle = CPamHandle
@@ -44,7 +49,7 @@ messageFromC cmes = (\s -> PamMessage s style) <$> peekCString (msg cmes)
                2 -> PamPromptEchoOn
                3 -> PamErrorMsg
                4 -> PamTextInfo
-               a -> error $ "unknown style value: " ++ show a
+               a -> error $ "unknown style value: " <> show a
 
 convWrapper :: PAMConv               -- A callback given by the user
             -> CInt                  -- Number of items in the array
@@ -53,7 +58,7 @@ convWrapper :: PAMConv               -- A callback given by the user
             -> Ptr ()                -- Pointer for application data (useless)
             -> IO CInt               -- Status code (0 indicates success)
 convWrapper _     c _    _    _  | c <= 0 = return 19 -- an error code?
-convWrapper userC c msgs resp _           = do
+convWrapper userC c msgs reply _          = do
   p1 <- peek msgs
 
   let mesArr = castPtr p1 :: Ptr CPamMessage
@@ -70,7 +75,7 @@ convWrapper userC c msgs resp _           = do
 
   respArr <- newArray cResponses
 
-  poke resp $ castPtr respArr
+  poke reply $ castPtr respArr
 
   return 0
   where
@@ -79,12 +84,11 @@ convWrapper userC c msgs resp _           = do
       return $ CPamResponse resp' 0
 
 pamStart :: String -> String -> PAMConv -> IO (PamHandle,PAMReturnCode)
-pamStart service user conv = do
+pamStart service user convIn = protect $ do
   cService <- newCString service
   cUser <- newCString user
 
-  wrapped <- mkconvFunc $ convWrapper conv
-  print wrapped
+  wrapped <- mkconvFunc $ convWrapper convIn
   let convStructHs = CPamConv wrapped nullPtr
 
   convPtr <- malloc
@@ -99,12 +103,12 @@ pamStart service user conv = do
   return (PamHandle (pamHandle, wrapped), toEnum $ fromIntegral r1)
 
 pamAuthenticate :: PamHandle -> CInt -> IO (PAMReturnCode)
-pamAuthenticate (PamHandle (hnd,_)) flags = do
+pamAuthenticate (PamHandle (hnd,_)) flags = protect $ do
   ret <- c_pam_authenticate hnd flags
   return $ toEnum $ fromIntegral ret
 
 pamSetCred :: PamHandle -> (Bool,PamCredFlags) -> IO PAMReturnCode
-pamSetCred (PamHandle (hnd,_)) (silent, flag) = do
+pamSetCred (PamHandle (hnd,_)) (silent, flag) = protect $ do
   let flag' = case flag of
         PAM_ESTABLISH_CRED -> 0x2
         PAM_DELETE_CRED -> 0x4
@@ -115,23 +119,30 @@ pamSetCred (PamHandle (hnd,_)) (silent, flag) = do
   return $ toEnum $ fromIntegral ret
 
 pamEnd :: PamHandle -> Int -> IO PAMReturnCode
-pamEnd (PamHandle (hnd,_)) status = do
+pamEnd (PamHandle (hnd,_)) status = protect $ do
   putStrLn "ending"
   hFlush stdout
   ret <- c_pam_end hnd $ fromIntegral status
   return $ toEnum $ fromIntegral ret
 
+protect :: IO a -> IO a
+protect act = runInBoundThread go
+  where
+    go = do
+      blockSignals reservedSignals
+      act `finally` unblockSignals reservedSignals
+
 pamOpenSession :: PamHandle -> Bool -> IO PAMReturnCode
-pamOpenSession (PamHandle (hnd,_)) silent = do
+pamOpenSession (PamHandle (hnd,_)) silent = protect $ do
   ret <- c_pam_open_session hnd $ if silent then 0x8000 else 0
   return $ toEnum $ fromIntegral ret
 pamCloseSession :: PamHandle -> Bool -> IO PAMReturnCode
-pamCloseSession (PamHandle (hnd,_)) silent = do
+pamCloseSession (PamHandle (hnd,_)) silent = protect $ do
   ret <- c_pam_close_session hnd $ if silent then 0x8000 else 0
   return $ toEnum $ fromIntegral ret
 
 pamSetItem :: PamHandle -> PAMItem -> IO PAMReturnCode
-pamSetItem (PamHandle (hnd,_)) item = do
+pamSetItem (PamHandle (hnd,_)) item = protect $ do
   let (itemType,func) = getPtr item
   ptr <- func
   let ptr' = castPtr ptr :: Ptr ()
@@ -140,4 +151,18 @@ pamSetItem (PamHandle (hnd,_)) item = do
   return $ toEnum $ fromIntegral ret
   where
     getPtr :: PAMItem -> (CInt, IO CString)
-    getPtr (PAM_TTY tty) = (3, newCString tty)
+    getPtr (PAM_TTY t) = (3, newCString t)
+
+pamGetEnvList :: PamHandle -> IO [(String,String)]
+pamGetEnvList (PamHandle (hnd,_)) = protect $ do
+  raw <- c_pam_getenvlist hnd
+  --middle <- _ $ raw
+  middle <- peekArray0 nullPtr raw
+  converted <- mapM peekCString middle
+  let splitter = splitOn "="
+  let
+    f :: [String] -> (String,String)
+    f (a:b) = (a,intercalate "=" b)
+    f [] = error "empty env found"
+  let splitUp = map f (map splitter converted)
+  return splitUp

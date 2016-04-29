@@ -38,15 +38,22 @@ import qualified Pipes.Prelude               as P
 import           System.Exit
 import           System.IO
 import           System.Random
+import           Control.Exception
 
 type XDiagram = QDiagram Rasterific V2 Double Any
 
 main :: IO ()
-main = startX11Pipe def testPipe
+main = (startX11Pipe def testPipe) `finally` do
+  putStrLn "clean exit"
+  return ()
 
 testPipe :: (P.MonadIO m) => Pipe X11Event X11Action m ()
-testPipe = go
+testPipe = go2
   where
+    go2 = do
+      P.liftIO $ print "bb"
+      P.liftIO $ hFlush stdout
+      go
     handleMotion m = do
       let V2 x y = _X11Event_cpos m
       let cursor = translate (V2 (fromIntegral x) (fromIntegral (negate y)))
@@ -54,9 +61,10 @@ testPipe = go
                    $ fc C.blue $ circle 5
       P.yield $ ADraw $ renderRast $ cursor `atop` rect 500 500
     go = do
+      P.liftIO $ putStrLn "reblock"
       event <- P.await
-      --P.liftIO $ print event
-      case event of MotionNotify m -> handleMotion m >> go
+      P.liftIO $ print event
+      case event of MotionNotify m -> handleMotion m >> go2
                     KeyPress k     -> let code = _X11Event_detail k
                                       in if code == X.xK_Q
                                          then P.yield AQuit
@@ -71,6 +79,7 @@ renderRast = renderDia Rasterific options
 data X11Action = ADraw !JImage
                | APoll
                | AQuit
+               | ANop
 
 data X11Config = X11Config { _queueSize :: Int }
                deriving (Eq, Read, Show)
@@ -88,17 +97,25 @@ startX11Pipe cfg pipe = do
 
 startX11 :: X11Config -> IO (Async (), Output X11Action, Input X11Event)
 startX11 cfg = do
-  (outputAction, inputAction) <- spawn $ newest 1
-  (outputEvent,  inputEvent)  <- spawn $ newest 1
+  (outputAction, inputAction) <- spawn $ bounded 2048 -- latest ANop
+  (outputEvent,  inputEvent)  <- spawn $ bounded 1024
   thread <- async $ do
     dpy <- X.openDisplay ""
     -- FIXME: should cover whole screen
     win <- mkUnmanagedWindow dpy 1000 400 500 500
     initializeX11Events dpy win
     X.mapWindow dpy win
-    let waitX11 = X.waitForEvent dpy 1000000000
+    let waitX11 = do
+          count <- X.pending dpy
+          if count == 0 then
+            X.waitForEvent dpy 1000000000
+          else
+            return False
     let pollX11 = getPendingX11Events dpy >>= sendAll outputEvent
-    let loop = do waitX11
+    let loop = do
+                  count <- X.pending dpy
+                  putStrLn $ "pending: " <> (show count)
+                  waitX11
                   pollX11
                   action <- atomically $ recv inputAction
                   case action
@@ -162,8 +179,12 @@ type XEventTuple d = ( X.Window, X.Window, X.Time
                      , X.Modifier, d, Bool )
 
 makeX11Event :: Display -> X.XEventPtr -> IO (Maybe X11Event)
-makeX11Event dpy xev = X.get_EventType xev >>= go
+makeX11Event dpy xev = X.get_EventType xev >>= go2
   where
+    go2 ev = do
+      a <- go ev
+      print "a"
+      return a
     go e | e == X.keyPress      = pure . KeyPress      <$> makeKeyEvent
     go e | e == X.keyRelease    = pure . KeyRelease    <$> makeKeyEvent
     go e | e == X.buttonPress   = pure . ButtonPress   <$> makeMouseEvent
@@ -246,6 +267,7 @@ drawImg :: X.Display -> X.Window -> XImg -> IO ()
 drawImg dpy win ximg = do
   gc <- X.createGC dpy win
   (_, _, _, w, h, _, _) <- X.getGeometry dpy win
+  print (w,h)
   X.putImage dpy win gc (xImage ximg) 0 0 0 0 w h
   X.freeGC dpy gc
 
@@ -436,3 +458,4 @@ main = do dpy <- openDisplay ""
 
 
 -}
+

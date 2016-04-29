@@ -68,3 +68,5 @@ foreign import ccall "security/pam_appl.h pam_end"           c_pam_end
   :: Ptr CPamHandleT -> CInt -> IO CInt
 foreign import ccall "security/pam_appl.h pam_set_item"      c_pam_set_item
   :: Ptr CPamHandleT -> CInt -> Ptr () -> IO CInt
+foreign import ccall "security/pam_appl.h pam_getenvlist"    c_pam_getenvlist
+  :: {# type pam_handle_t #} -> IO (Ptr (CString))

@@ -1,7 +1,8 @@
 { mkDerivation, aeson, array, async, base, bytestring, c2hs, colour
 , containers, data-default, diagrams-lib, diagrams-rasterific
 , exceptions, JuicyPixels, lens, mtl, pam, pipes, pipes-concurrency
-, process, random, rasterific-svg, semigroups, stdenv, unix, X11
+, process, random, rasterific-svg, semigroups, split, stdenv, unix
+, X11
 }:
 mkDerivation {
   pname = "hsdm";
@@ -13,7 +14,7 @@ mkDerivation {
     aeson array async base bytestring colour containers data-default
     diagrams-lib diagrams-rasterific exceptions JuicyPixels lens mtl
     pipes pipes-concurrency process random rasterific-svg semigroups
-    unix X11
+    split unix X11
   ];
   librarySystemDepends = [ pam ];
   libraryToolDepends = [ c2hs ];
