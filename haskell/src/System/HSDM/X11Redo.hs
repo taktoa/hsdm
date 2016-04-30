@@ -1,20 +1,17 @@
-{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GADTs           #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module System.HSDM.X11Redo where
 
-import System.Exit
-import Graphics.X11.Xlib
-import qualified System.HSDM.X11 as Old
-import Control.Concurrent
-import Data.Bits
-import Linear
-import           Diagrams
-import           Diagrams.Backend.Rasterific
-import qualified Data.Colour.Names           as C
+import           Control.Concurrent
+import           Control.Lens
+import           Control.Monad
 import           Data.Array.Storable
+import           Data.Bits
 import           Data.Bits
 import           Data.ByteString             (ByteString, useAsCString)
 import qualified Data.ByteString             as BS
+import qualified Data.Colour.Names           as C
 import qualified Data.Colour.Names           as C
 import           Data.Default
 import           Data.Foldable               (toList)
@@ -25,29 +22,35 @@ import           Data.Set                    (Set)
 import qualified Data.Set                    as Set
 import           Data.Typeable               (Typeable)
 import           Data.Word
-import Graphics.Svg( loadSvgFile,Document )
-import Graphics.Rasterific.Svg( loadCreateFontCache
-                              , renderSvgDocument
-                              )
-import Graphics.Text.TrueType (FontCache)
+import           Diagrams
+import           Diagrams.Backend.Rasterific
+import           Graphics.Rasterific.Svg     (loadCreateFontCache,
+                                              renderSvgDocument)
+import           Graphics.Svg                (Document, loadSvgFile)
+import           Graphics.Text.TrueType      (FontCache)
+import           Graphics.X11.Xlib
+import           Linear
+import           System.Exit
+import qualified System.HSDM.X11             as Old
 
-data State = State {doc :: Document, cache :: FontCache}
+data State = State { _doc   :: Document
+                   , _cache :: FontCache }
+makeLenses ''State
 
 makeState :: IO State
 makeState = do
-  f <- loadSvgFile "/home/clever/apps/hsdm/circle.svg"
+  f <- loadSvgFile "../circle.svg"
   case f of
     Nothing -> error "unable to load svg"
-    Just doc -> do
-      cache <- loadCreateFontCache "fonty-texture-cache"
-      return $ State doc cache
+    Just d  -> State d <$> loadCreateFontCache "fonty-texture-cache"
 
 mainRewrite :: IO ()
 mainRewrite = do
   state <- makeState
   dpy <- openDisplay ""
   let scr = defaultScreen dpy
-  let (width,height) = (fromIntegral $ displayWidth dpy scr, fromIntegral $ displayHeight dpy scr)
+  let (width, height) = ( fromIntegral $ displayWidth  dpy scr
+                        , fromIntegral $ displayHeight dpy scr )
   win <- mkFramelessWindow dpy (0,0) (width,height)
   Old.initializeX11Events dpy win
   mapWindow dpy win
@@ -72,7 +75,7 @@ mkFramelessWindow dpy (x,y) (w,h) = do
   --  createWindow dpy rw x y w h 0 depth inputOutput visual attrmask attrs
   createSimpleWindow dpy rw x y w h 0 borderColor backgroundColor
 
-renderScene :: State -> (Double,Double) -> (Int,Int) -> IO Old.JImage
+renderScene :: State -> (Int, Int) -> (Int, Int) -> IO Old.JImage
 renderScene state (w,h) (x,y) = do
   --let cursor = translate (V2 (fromIntegral x) (fromIntegral y)) $ fc C.blue $ circle 10
   --let topleft = translate (V2 0 0) $ fc C.green $ circle 5
@@ -80,7 +83,7 @@ renderScene state (w,h) (x,y) = do
   --let box = rect 200 100 # lc C.red
   --let scene = box
   --let border = rect w h # lc C.green
-  (finalImage, _) <- renderSvgDocument (cache state) Nothing 96 (doc state)
+  (finalImage, _) <- renderSvgDocument (state ^. cache) (Just (w, h)) 96 (state ^. doc)
   return finalImage
   --Old.renderRast $ reflectY $ cursor `atop` (scene `atop` border)
 
@@ -92,10 +95,7 @@ eventLoop state dpy win = allocaXEvent $ go 1000
       nextEvent dpy evtPtr
       parsed <- Old.makeX11Event dpy evtPtr
       res <- handle parsed
-      if res then
-          go (limit -1) evtPtr
-        else
-          return ()
+      when res $ go (limit -1) evtPtr
     handle (Just evt) = do
       level2 evt
     level2 (Old.MotionNotify ev) = do
@@ -103,12 +103,13 @@ eventLoop state dpy win = allocaXEvent $ go 1000
       print $ [ x, y ]
       --let step1 = circle 5
       --let step2 = fc C.blue step1
-      let cursor = translate (V2 (fromIntegral x) (fromIntegral y)) $ fc C.blue $ circle 5
-      let topleft = translate (V2 0 0) $ fc C.green $ circle 10
-      let scene = cursor `atop` topleft
-      let image = Old.renderRast $ cursor `atop` rect 500 500
+      --let cursor = translate (V2 (fromIntegral x) (fromIntegral y))
+      --             $ fc C.blue $ circle 5
+      --let topleft = translate (V2 0 0) $ fc C.green $ circle 10
+      --let scene = cursor `atop` topleft
+      --let image = Old.renderRast $ cursor `atop` rect 500 500
       --Old.drawJPImage dpy win image
-      img <- renderScene state (1280,800) (x,y)
+      img <- renderScene state (800, 800) (x,y)
       Old.drawJPImage dpy win img
       return True
     level2 (Old.ButtonPress ev) = do

@@ -1,12 +1,25 @@
 let
   pkgs = import <nixpkgs> {};
+  overrideCabal = pkgs.haskell.lib.overrideCabal;
+  haskellPackages = pkgs.haskellPackages.override {
+    overrides = self: super: {
+      FontyFruity = overrideCabal super.FontyFruity (old: {
+        src = pkgs.fetchFromGitHub {
+          owner  = "taktoa";
+          repo   = "FontyFruity";
+          rev    = "18bdf2ca36e724c128adc7fd178efc86a9fd9959";
+          sha256 = "0940frxngr89rk8mqaa1nizrxcgm3y8d4rp880gwjn81hpm0zk80";
+        };
+        libraryHaskellDepends = old.libraryHaskellDepends ++ [ super.xml ];
+      });
+    };
+  };
   selfCP = pkgs.newScope self;
   self = rec {
-    hsdm = pkgs.haskellPackages.callPackage ./hsdm.nix { inherit (pkgs) pam; };
-    hsdm-shell = pkgs.haskell.lib.overrideCabal hsdm (old: {
-                   librarySystemDepends = old.librarySystemDepends
-                                          ++ [ pkgs.pkgconfig ];
-                 });
+    hsdm = haskellPackages.callPackage ./hsdm.nix {
+             inherit (pkgs) pam;
+             inherit (haskellPackages) FontyFruity;
+           };
     xorg2 = {
       inherit (pkgs.xorg) xwininfo xauth xprop xkeyboardconfig;
       xorgserver = pkgs.lib.overrideDerivation pkgs.xorg.xorgserver (old: {

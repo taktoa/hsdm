@@ -1,8 +1,8 @@
 { mkDerivation, aeson, array, async, base, bytestring, c2hs, colour
 , containers, data-default, diagrams-lib, diagrams-rasterific
-, exceptions, JuicyPixels, lens, mtl, pam, pipes, pipes-concurrency
-, process, random, rasterific-svg, semigroups, split, stdenv, unix
-, X11
+, exceptions, FontyFruity, JuicyPixels, lens, linear, mtl, pam
+, pipes, pipes-concurrency, process, random, rasterific-svg
+, semigroups, split, stdenv, svg-tree, unix, X11
 }:
 mkDerivation {
   pname = "hsdm";
@@ -12,9 +12,9 @@ mkDerivation {
   isExecutable = true;
   libraryHaskellDepends = [
     aeson array async base bytestring colour containers data-default
-    diagrams-lib diagrams-rasterific exceptions JuicyPixels lens mtl
-    pipes pipes-concurrency process random rasterific-svg semigroups
-    split unix X11
+    diagrams-lib diagrams-rasterific exceptions FontyFruity JuicyPixels
+    lens linear mtl pipes pipes-concurrency process random
+    rasterific-svg semigroups split svg-tree unix X11
   ];
   librarySystemDepends = [ pam ];
   libraryToolDepends = [ c2hs ];
