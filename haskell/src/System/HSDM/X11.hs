@@ -7,6 +7,7 @@ import qualified Codec.Picture.Png           as JP
 import qualified Codec.Picture.Types         as JP
 import           Control.Concurrent
 import           Control.Concurrent.Async
+import           Control.Exception
 import           Control.Lens
 import           Control.Monad
 import           Data.Array.Storable
@@ -38,14 +39,11 @@ import qualified Pipes.Prelude               as P
 import           System.Exit
 import           System.IO
 import           System.Random
-import           Control.Exception
 
 type XDiagram = QDiagram Rasterific V2 Double Any
 
 main :: IO ()
-main = (startX11Pipe def testPipe) `finally` do
-  putStrLn "clean exit"
-  return ()
+main = startX11Pipe def testPipe `finally` putStrLn "clean exit"
 
 testPipe :: (P.MonadIO m) => Pipe X11Event X11Action m ()
 testPipe = go2
