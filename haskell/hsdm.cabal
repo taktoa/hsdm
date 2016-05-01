@@ -21,7 +21,10 @@ source-repository head
                           
 library
     build-depends:        base                == 4.*
+                        , transformers        == 0.4.*
+                        , mtl                 == 2.2.*
                         , bytestring          == 0.10.*
+                        , text                == 1.2.*
                         , lens                == 4.13.*
                         , unix                == 2.7.*
                         , process             == 1.2.*
@@ -50,6 +53,7 @@ library
                         , frpnow              == 0.18.*
                         , gtk3                == 0.14.*
                         , glib                == 0.13.*
+                        , cairo               == 0.13.*
     default-language:     Haskell2010
     exposed-modules:      System.HSDM
                           System.HSDM.X11
@@ -57,6 +61,7 @@ library
                           System.HSDM.GTKRedo
                           System.HSDM.PAM
                           System.HSDM.PAM.Internals
+                          Control.FRPNow.GTK3
     extra-libraries:      pam
     ghc-options:          -Wall -O2 -threaded -g
                           -fno-warn-type-defaults

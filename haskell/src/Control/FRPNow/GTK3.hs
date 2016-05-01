@@ -11,7 +11,7 @@
 --
 -- This module provides interoperability of FRPNow and the GTK system.
 
-module Control.FRPNow.GTK
+module Control.FRPNow.GTK3
   ( -- * General interface
     runNowGTK, setAttr, getSignal
   , getUnitSignal, getSimpleSignal
