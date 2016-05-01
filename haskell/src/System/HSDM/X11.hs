@@ -1,5 +1,7 @@
+{-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TemplateHaskell            #-}
 
 module System.HSDM.X11 where
 
@@ -40,6 +42,75 @@ import           System.Exit
 import           System.IO
 import           System.Random
 
+type X11Position  = V2 Int
+type X11Dimension = V2 Int
+
+type X11Button = X.Button
+type X11KeySym = X.KeySym
+
+data X11Mask = MShift
+             | MLock
+             | MControl
+             | MMod1
+             | MMod2
+             | MMod3
+             | MMod4
+             | MMod5
+             | MButton1
+             | MButton2
+             | MButton3
+             | MButton4
+             | MButton5
+             deriving (Eq, Ord, Read, Show)
+
+newtype X11Modifier = X11Modifier { _masks :: Set X11Mask }
+                    deriving (Eq, Read, Show, Monoid)
+
+data X11Event
+  = KeyPress
+    { _xev_window    :: !X.Window
+    , _xev_subwindow :: !X.Window
+    , _xev_time      :: !X.Time
+    , _xev_pos       :: !X11Position
+    , _xev_modifier  :: !X11Modifier
+    , _xev_key       :: !X11KeySym }
+  | KeyRelease
+    { _xev_window    :: !X.Window
+    , _xev_subwindow :: !X.Window
+    , _xev_time      :: !X.Time
+    , _xev_pos       :: !X11Position
+    , _xev_modifier  :: !X11Modifier
+    , _xev_key       :: !X11KeySym }
+  | ButtonPress
+    { _xev_window    :: !X.Window
+    , _xev_subwindow :: !X.Window
+    , _xev_time      :: !X.Time
+    , _xev_pos       :: !X11Position
+    , _xev_modifier  :: !X11Modifier
+    , _xev_button    :: !X11Button }
+  | ButtonRelease
+    { _xev_window    :: !X.Window
+    , _xev_subwindow :: !X.Window
+    , _xev_time      :: !X.Time
+    , _xev_pos       :: !X11Position
+    , _xev_modifier  :: !X11Modifier
+    , _xev_button    :: !X11Button }
+  | MotionNotify
+    { _xev_window :: !X.Window
+    , _xev_pos    :: !X11Position }
+  | ExposeNotify
+    { _xev_window :: !X.Window
+    , _xev_pos    :: !X11Position
+    , _xev_size   :: !X11Dimension
+    , _xev_count  :: !Int }
+  | MapNotify
+    { _xev_window :: !X.Window
+    , _xev_event  :: !X.Window }
+  deriving (Eq, Show)
+
+makeLenses ''X11Event
+
+type JImage = JP.Image JP.PixelRGBA8
 type XDiagram = QDiagram Rasterific V2 Double Any
 
 main :: IO ()
@@ -53,7 +124,7 @@ testPipe = go2
       P.liftIO $ hFlush stdout
       go
     handleMotion m = do
-      let V2 x y = _X11Event_cpos m
+      let Just (V2 x y) = m ^? xev_pos
       let cursor = translate (V2 (fromIntegral x) (fromIntegral (negate y)))
                    $ translate (V2 (-250) (250))
                    $ fc C.blue $ circle 5
@@ -62,12 +133,11 @@ testPipe = go2
       P.liftIO $ putStrLn "reblock"
       event <- P.await
       P.liftIO $ print event
-      case event of MotionNotify m -> handleMotion m >> go2
-                    KeyPress k     -> let code = _X11Event_detail k
-                                      in if code == X.xK_Q
-                                         then P.yield AQuit
-                                         else P.liftIO (print event) >> go
-                    _              -> go
+      case event of m@(MotionNotify {}) -> handleMotion m >> go2
+                    k@(KeyPress {})     -> if k ^? xev_key == Just X.xK_Q
+                                           then P.yield AQuit
+                                           else P.liftIO (print event) >> go
+                    _                   -> go
 
 renderRast :: XDiagram -> JImage
 renderRast = renderDia Rasterific options
@@ -132,79 +202,80 @@ sendAll out = go
     go []     = return ()
     go (x:xs) = atomically (send out x) >> go xs
 
-type X11Position = V2 Int
-
-type X11Button = X.Button
-type X11KeySym = X.KeySym
-
-data X11Mask = MShift
-             | MLock
-             | MControl
-             | MMod1
-             | MMod2
-             | MMod3
-             | MMod4
-             | MMod5
-             | MButton1
-             | MButton2
-             | MButton3
-             | MButton4
-             | MButton5
-             deriving (Eq, Ord, Read, Show)
-
-newtype X11Modifier = X11Modifier { _masks :: Set X11Mask }
-                    deriving (Eq, Read, Show, Monoid)
-
-data X11EventData d = X11EventData { _X11Event_root     :: !X.Window
-                                   , _X11Event_child    :: !X.Window
-                                   , _X11Event_time     :: !X.Time
-                                   , _X11Event_cpos     :: !X11Position
-                                   , _X11Event_rpos     :: !X11Position
-                                   , _X11Event_modifier :: !X11Modifier
-                                   , _X11Event_detail   :: !d
-                                   }
-                    deriving (Eq, Show)
-
-data X11Event = KeyPress      !(X11EventData X11KeySym)
-              | KeyRelease    !(X11EventData X11KeySym)
-              | ButtonPress   !(X11EventData X11Button)
-              | ButtonRelease !(X11EventData X11Button)
-              | MotionNotify  !(X11EventData ())
-              deriving (Eq, Show)
-
 type XEventTuple d = ( X.Window, X.Window, X.Time
                      , CInt, CInt, CInt, CInt
                      , X.Modifier, d, Bool )
 
-makeX11Event :: Display -> X.XEventPtr -> IO (Maybe X11Event)
-makeX11Event dpy xev = X.get_EventType xev >>= go2
-  where
-    go2 ev = do
-      a <- go ev
-      print "a"
-      return a
-    go e | e == X.keyPress      = pure . KeyPress      <$> makeKeyEvent
-    go e | e == X.keyRelease    = pure . KeyRelease    <$> makeKeyEvent
-    go e | e == X.buttonPress   = pure . ButtonPress   <$> makeMouseEvent
-    go e | e == X.buttonRelease = pure . ButtonRelease <$> makeMouseEvent
-    go e | e == X.motionNotify  = pure . MotionNotify  <$> makeMotionEvent
-    --go e | e == X.expose        = pure . Expose        <$> makeExposeEvent
-    go e                        = putStrLn ("unhandled type:" <> show e) >> return Nothing
 
-    makeKeyEvent    = makeEvent X.get_KeyEvent    convertKey
-    makeMouseEvent  = makeEvent X.get_ButtonEvent return
-    makeMotionEvent = makeEvent X.get_MotionEvent (const (return ()))
-    --makeExposeEvent = makeEvent X.get_ExposeEvent
+
+makeX11Event :: Display -> X.XEventPtr -> IO (Maybe X11Event)
+makeX11Event dpy xev = do e <- X.getEvent xev
+                          t <- X.get_EventType xev
+                          go (e, t)
+  where
+    getType e = (e, X.ev_event_type e)
+
+    go (e, t) | t == X.keyPress      = pure <$> makeKeyPressEvent e
+    go (e, t) | t == X.keyRelease    = pure <$> makeKeyReleaseEvent e
+    go (e, t) | t == X.buttonPress   = pure <$> makeButtonPressEvent e
+    go (e, t) | t == X.buttonRelease = pure <$> makeButtonReleaseEvent e
+    go (e, t) | t == X.motionNotify  = pure <$> makeMotionNotifyEvent e
+    go (e, t) | t == X.expose        = pure <$> makeExposeNotifyEvent e
+    go (e, t) | t == X.mapNotify     = pure <$> makeMapNotifyEvent e
+    go _                             = return Nothing
+
+    -- go e | e == X.keyPress      = pure <$> makeKeyPressEvent
+    -- go e | e == X.keyRelease    = pure <$> makeKeyReleaseEvent
+    -- go e | e == X.buttonPress   = pure <$> makeButtonPressEvent
+    -- go e | e == X.buttonRelease = pure <$> makeButtonReleaseEvent
+    -- go e | e == X.motionNotify  = pure <$> makeMotionNotifyEvent
+    -- go e | e == X.expose        = pure <$> makeExposeNotifyEvent
+    -- go e | e == X.mapNotify     = pure <$> makeMapNotifyEvent
+    -- go e                        = return Nothing
+
+    makeV :: (Integral i, Num n) => i -> i -> V2 n
+    makeV x y = V2 (fromIntegral x) (fromIntegral y)
+
+    makeKeyPressEvent e = do
+      let (w, sw, t, x, y, m, k) = ( X.ev_root e, X.ev_subwindow e
+                                   , X.ev_time e, X.ev_x e, X.ev_y e
+                                   , X.ev_state e, X.ev_keycode e )
+      key <- convertKey k
+      return $ KeyPress w sw t (makeV x y) (makeModifier m) key
+    makeKeyReleaseEvent e = do
+      let (w, sw, t, x, y, m, k) = ( X.ev_root e, X.ev_subwindow e
+                                   , X.ev_time e, X.ev_x e, X.ev_y e
+                                   , X.ev_state e, X.ev_keycode e )
+      key <- convertKey k
+      return $ KeyRelease w sw t (makeV x y) (makeModifier m) key
+    makeButtonPressEvent e = do
+      let (w, sw, t, x, y, m, b) = ( X.ev_root e, X.ev_subwindow e
+                                   , X.ev_time e, X.ev_x e, X.ev_y e
+                                   , X.ev_state e, X.ev_button e )
+      return $ ButtonPress w sw t (makeV x y) (makeModifier m) b
+    makeButtonReleaseEvent e = do
+      let (w, sw, t, x, y, m, b) = ( X.ev_root e, X.ev_subwindow e
+                                   , X.ev_time e, X.ev_x e, X.ev_y e
+                                   , X.ev_state e, X.ev_button e )
+      return $ ButtonRelease w sw t (makeV x y) (makeModifier m) b
+    makeMotionNotifyEvent e = do
+      let (w, x, y) = (X.ev_window e, X.ev_x e, X.ev_y e)
+      return $ MotionNotify w (makeV x y)
+    makeExposeNotifyEvent e = do
+      let (win, x, y, w, h, c) = ( X.ev_window e, X.ev_x e, X.ev_y e
+                                 , X.ev_width e, X.ev_height e, X.ev_count e )
+      return $ ExposeNotify win (makeV x y) (makeV w h) (fromIntegral c)
+    makeMapNotifyEvent e = do
+      let (win, ev) = (X.ev_window e, X.ev_event e)
+      return $ MapNotify win ev
 
     convertKey k = X.keycodeToKeysym dpy k 0
 
-    makeEvent :: (X.XEventPtr -> IO (XEventTuple t))
-              -> (t -> IO d) -> IO (X11EventData d)
-    makeEvent getter f = do
-      (rw, cw, time, cx, cy, rx, ry, m, d, _) <- getter xev
-      let cpos = V2 (fromIntegral cx) (fromIntegral cy)
-      let rpos = V2 (fromIntegral rx) (fromIntegral ry)
-      X11EventData rw cw time cpos rpos (makeModifier m) <$> f d
+-- get_ExposeEvent (Position, Position, Dimension, Dimension, CInt)
+
+--  | MapNotify
+--    { _window    :: !X.Window
+--    , _event     :: !X.Window }
 
 makeModifier :: X.Modifier -> X11Modifier
 makeModifier xmod = X11Modifier
@@ -249,26 +320,23 @@ initializeX11Events dpy win = X.selectInput dpy win $ foldr (.|.) 0 masks
             , X.keyReleaseMask
             , X.buttonPressMask
             , X.buttonReleaseMask
-            , X.pointerMotionMask ]
---            , X.exposureMask ]
+            , X.pointerMotionMask
+            , X.exposureMask ]
 
 getPendingX11Events :: Display -> IO [X11Event]
 getPendingX11Events dpy = X.allocaXEvent $ flip go []
   where
     go xev es = do p <- X.pending dpy
-                   if p == 0
-                     then return es
-                     else getEvent xev >>= go xev . (<> es) . toList
+                   case p
+                     of 0 -> return es
+                        _ -> getEvent xev >>= go xev . (<> es) . toList
     getEvent :: X.XEventPtr -> IO (Maybe X11Event)
     getEvent xev = X.nextEvent dpy xev >> makeX11Event dpy xev
-
-type JImage = JP.Image JP.PixelRGBA8
 
 drawImg :: X.Display -> X.Window -> XImg -> IO ()
 drawImg dpy win ximg = do
   gc <- X.createGC dpy win
   (_, _, _, w, h, _, _) <- X.getGeometry dpy win
-  print (w,h)
   X.putImage dpy win gc (xImage ximg) 0 0 0 0 w h
   X.freeGC dpy gc
 
@@ -284,43 +352,34 @@ fromJPData img = newArray ((0, 0, 0), (h - 1, w - 1, 3)) 0 >>= setValues
     w = JP.imageWidth  img
     h = JP.imageHeight img
     getC :: Int -> JP.PixelRGBA8 -> Word8
-    getC 0 (JP.PixelRGBA8 r _ _ _) = r
+    getC 0 (JP.PixelRGBA8 _ _ b _) = b
     getC 1 (JP.PixelRGBA8 _ g _ _) = g
-    getC 2 (JP.PixelRGBA8 _ _ b _) = b
+    getC 2 (JP.PixelRGBA8 r _ _ _) = r
     getC 3 (JP.PixelRGBA8 _ _ _ a) = a
     getC _ _                       = error "Invalid color channel"
-    getPix = JP.pixelAt img
+    getChannel !c !x !y = getC c $ JP.pixelAt img x y
     setValues :: XImageArray -> IO XImageArray
     setValues arr = getBounds arr >>= go . range
       where
         go :: [(Int, Int, Int)] -> IO XImageArray
-        go []             = return arr
-        go ((y, x, c):xs) = do writeArray arr (y, x, c) $! getC c $! getPix x y
-                               go xs
+        go ps = mapM_ copyPixel ps >> return arr
+        copyPixel (y, x, c) = writeArray arr (y, x, c) $! getChannel c x y
 
 makeXImage :: X.Display -> JImage -> IO XImg
-makeXImage dpy image = do d <- fromJPData image
-                          xid <- mapIndices bs mapIdx d
-                          withStorableArray xid (ci xid . castPtr)
+makeXImage dpy img = do xid <- fromJPData img
+                        withStorableArray xid (ci xid . castPtr)
   where
     w, h :: Integral i => i
-    w = fromIntegral $ JP.imageWidth  image
-    h = fromIntegral $ JP.imageHeight image
+    w = fromIntegral $ JP.imageWidth  img
+    h = fromIntegral $ JP.imageHeight img
     scr = X.defaultScreen dpy
     dep = X.defaultDepth  dpy scr
     vis = X.defaultVisual dpy scr
-    ci :: XImageArray -> CString -> IO XImg
     ci bytes p = let makeXI x = XImg x bytes w h
                  in makeXI <$> X.createImage dpy vis dep X.zPixmap 0 p w h 32 0
-    bs = ((0, 0, 0), (h - 1, w - 1, 3))
-    mapIdx (y, x, c) = let helper 0 = 2
-                           helper 1 = 1
-                           helper 2 = 0
-                           helper 3 = 0
-                       in (y, x, helper c)
 
 drawJPImage :: X.Display -> X.Window -> JImage -> IO ()
-drawJPImage dpy win image = makeXImage dpy image >>= drawImg dpy win
+drawJPImage dpy win img = makeXImage dpy img >>= drawImg dpy win
 
 convertDynImage :: JP.DynamicImage -> Maybe JImage
 convertDynImage (JP.ImageY8     img) = Just $ JP.promoteImage img
@@ -351,6 +410,8 @@ convertDynImage (JP.ImageCMYK16   _) = Nothing
 
 
 
+
+
 mkUnmanagedWindow :: Display
                   -> Pos -> Pos
                   -> Dim -> Dim
@@ -363,100 +424,4 @@ mkUnmanagedWindow dpy x y w h = do
   let attrmask = X.cWOverrideRedirect .|. X.cWBorderPixel .|. X.cWBackPixel
   backgroundColor <- initColor dpy "black"
   borderColor     <- initColor dpy "green"
-  --X.allocaSetWindowAttributes $ \attrs -> do
-  --  X.set_override_redirect attrs True
-  --  X.set_background_pixel attrs backgroundColor
-  --  X.set_border_pixel attrs borderColor
-  --  X.createWindow dpy rw x y w h 1 depth X.inputOutput visual attrmask attrs
   X.createSimpleWindow dpy rw x y w h 1 borderColor backgroundColor
-
-{-
-
-createImageFromBS :: ( Integral depth
-                     , Integral offset
-                     , Integral dimension
-                     , Integral padding
-                     , Integral bytesPerLine )
-                     => Display
-                     -> Visual
-                     -> depth
-                     -> ImageFormat
-                     -> offset
-                     -> ByteString
-                     -> dimension
-                     -> dimension
-                     -> padding
-                     -> bytesPerLine
-                     -> IO Image
-createImageFromBS dpy vis depth fmt offset bs w h pad bpl = useAsCString bs go
-  where
-    c :: (Integral a, Num b) => a -> b
-    c = fromIntegral
-    (cdep, coff, cw, ch, cp, cb) = (c depth, c offset, c w, c h, c pad, c bpl)
-    go cs = createImage dpy vis cdep fmt coff cs cw ch cp cb
-
-createImageEasy :: (Integral dimension)
-                   => Display
-                   -> ByteString
-                   -> dimension
-                   -> dimension
-                   -> IO Image
-createImageEasy dpy bs w h
-  = let scr = defaultScreen dpy
-        vis = defaultVisual dpy scr
-    in createImageFromBS dpy vis 0 xyBitmap 0 bs w h 0 8
-
-
-type Point32 = (Int32, Int32)
-type Vector32 = (Word32, Word32)
-
-drawRect :: Display -> Window -> Point32 -> Vector32 -> String -> IO ()
-drawRect dpy win (x, y) (w, h) colorName = do
-  gc <- createGC dpy win
-  color <- initColor dpy colorName
-  setForeground dpy gc color
-  fillRectangle dpy win gc x y w h
-  freeGC dpy gc
-
-drawShit :: Display -> Window -> Vector32 -> Int -> IO ()
-drawShit dpy win (width, height) num = getStdGen >>= flip go num
-  where
-    colors = ["red", "green", "blue"]
-    rectangle = drawRect dpy win
-    coerceInt = fromIntegral
-    go :: RandomGen g => g -> Int -> IO ()
-    go _ 0 = return ()
-    go g n = do let (x, gen0) = randomR (0, width)  g
-                let (y, gen1) = randomR (0, height) gen0
-                let (w, gen2) = randomR (0, width)  gen1
-                let (h, gen3) = randomR (0, height) gen2
-                let (c, gen4) = randomR (0, length colors - 1) gen3
-                rectangle (coerceInt x, coerceInt y) (w, h) (colors !! c)
-                sync dpy False
-                threadDelay 10000
-                go gen4 (n - 1)
-
-main :: IO ()
-main = do dpy <- openDisplay ""
-          let dflt = defaultScreen dpy
-          let scr = defaultScreenOfDisplay dpy
-          let (width, height) = (400, 400)
-          rootw <- rootWindow dpy dflt
-          win <- mkUnmanagedWindow dpy scr rootw 0 0 width height
-          mapWindow dpy win
-          hdl <- openFile "output.xbm" ReadMode
-          !xbm <- BS.hGetContents hdl
-          hClose hdl
-          img <- createImageEasy dpy xbm 16 7
-          gc <- createGC dpy win
-          putImage dpy win gc img 0 0 0 0 16 7
-          freeGC dpy gc
-          destroyImage img
-          sync dpy False
-          threadDelay (10 * 1000 * 1000)
-          --void getLine
-          exitSuccess
-
-
--}
-

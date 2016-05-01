@@ -44,38 +44,43 @@ makeState = do
   f <- loadSvgFile "../circle.svg"
   case f of
     Nothing -> error "unable to load svg"
-    Just d  -> State d <$> loadCreateFontCache "fonty-texture-cache"
+    Just d  -> State d <$> loadCreateFontCache "/tmp/fonty-texture-cache"
 
 mainRewrite :: IO ()
 mainRewrite = do
   state <- makeState
   dpy <- openDisplay ""
   let scr = defaultScreen dpy
-  let (width, height) = ( fromIntegral $ displayWidth  dpy scr
-                        , fromIntegral $ displayHeight dpy scr )
-  win <- mkFramelessWindow dpy (0,0) (1024,768)
+  let (w, h) = ( fromIntegral $ displayWidth  dpy scr
+               , fromIntegral $ displayHeight dpy scr )
+  win <- mkFramelessWindow dpy (V2 0 0) (V2 600 600)
   Old.initializeX11Events dpy win
-  window_type_atom <- internAtom dpy "_NET_WM_WINDOW_TYPE" False
-  type_atom <- internAtom dpy "ATOM" False
-  dialog_atom <- internAtom dpy "_NET_WM_WINDOW_TYPE_DIALOG" False
-  pid_atom <- internAtom dpy "_NET_WM_PID" False
-  cardinal_atom <- internAtom dpy "CARDINAL" False
-  allowed_atom <- internAtom dpy "_NET_WM_ALLOWED_ACTIONS" False
-  close_atom <- internAtom dpy "_NET_WM_ACTION_CLOSE" False
-
-  changeProperty32 dpy win window_type_atom type_atom propModeReplace [ fromIntegral dialog_atom ]
-  mypid <- getProcessID
-  changeProperty32 dpy win pid_atom cardinal_atom propModeReplace [ fromIntegral mypid ]
-  changeProperty32 dpy win allowed_atom cardinal_atom propModeAppend [ fromIntegral close_atom ]
+  typeA        <- intern dpy "ATOM"
+  cardinalA    <- intern dpy "CARDINAL"
+  window_typeA <- intern dpy "_NET_WM_WINDOW_TYPE"
+  dialogA      <- intern dpy "_NET_WM_WINDOW_TYPE_DIALOG"
+  pidA         <- intern dpy "_NET_WM_PID"
+  allowedA     <- intern dpy "_NET_WM_ALLOWED_ACTIONS"
+  closeA       <- intern dpy "_NET_WM_ACTION_CLOSE"
+  let changeProp = changeProperty32 dpy win
+  let changePropR k t = changeProp k t propModeReplace
+  let changePropA k t = changeProp k t propModeAppend
+  pid <- fromIntegral <$> getProcessID
+  changePropR window_typeA typeA     [ dialogA ]
+  changePropR pidA         cardinalA [ pid     ]
+  changePropA allowedA     cardinalA [ closeA  ]
   mapWindow dpy win
-  img <- renderScene state (fromIntegral width, fromIntegral height) (0,0)
+  img <- renderScene state (V2 w h) (V2 0 0)
   Old.drawJPImage dpy win img
   eventLoop state dpy win
   closeDisplay dpy
   exitSuccess
+  where
+    intern :: (Integral i) => Display -> String -> IO i
+    intern dpy x = fromIntegral <$> internAtom dpy x False
 
-mkFramelessWindow :: Display -> (Old.Pos,Old.Pos) -> (Old.Dim,Old.Dim) -> IO Window
-mkFramelessWindow dpy (x,y) (w,h) = do
+mkFramelessWindow :: Display -> V2 Position -> V2 Dimension -> IO Window
+mkFramelessWindow dpy (V2 x y) (V2 w h) = do
   let scr = defaultScreenOfDisplay dpy
   rw <- rootWindow dpy (defaultScreen dpy)
   let visual = defaultVisualOfScreen scr
@@ -83,58 +88,35 @@ mkFramelessWindow dpy (x,y) (w,h) = do
   let attrmask = cWOverrideRedirect .|. cWBackPixel
   backgroundColor <- Old.initColor dpy "purple"
   borderColor     <- Old.initColor dpy "green"
-  --allocaSetWindowAttributes $ \attrs -> do
-  --  set_override_redirect attrs True
-  --  set_background_pixel attrs backgroundColor
-  --  createWindow dpy rw x y w h 0 depth inputOutput visual attrmask attrs
   createSimpleWindow dpy rw x y w h 0 borderColor backgroundColor
 
-renderScene :: State -> (Int, Int) -> (Int, Int) -> IO Old.JImage
-renderScene state (w,h) (x,y) = do
-  --let cursor = translate (V2 (fromIntegral x) (fromIntegral y)) $ fc C.blue $ circle 10
-  --let topleft = translate (V2 0 0) $ fc C.green $ circle 5
-  --let bottomright = translate (V2 100 100) $ fc C.red $ circle 5
-  --let box = rect 200 100 # lc C.red
-  --let scene = box
-  --let border = rect w h # lc C.green
-  (finalImage, _) <- renderSvgDocument (state ^. cache) (Just (w, h)) 96 (state ^. doc)
+renderScene :: State -> V2 Int -> V2 Int -> IO Old.JImage
+renderScene (State d c) (V2 x y) (V2 w h) = do
+  (finalImage, _) <- renderSvgDocument c (Just (w, h)) 96 d
   return finalImage
-  --Old.renderRast $ reflectY $ cursor `atop` (scene `atop` border)
 
 eventLoop :: State -> Display -> Window -> IO ()
 eventLoop state dpy win = allocaXEvent $ go 1000
   where
-    go 0 _ = return ()
-    go limit evtPtr = do
-      nextEvent dpy evtPtr
-      parsed <- Old.makeX11Event dpy evtPtr
-      res <- handle parsed
-      when res $ go (limit -1) evtPtr
-    handle (Just evt) = do
-      level2 evt
-    level2 (Old.MotionNotify ev) = do
-      let V2 x y = Old._X11Event_cpos ev
-      print $ [ x, y ]
-      --let step1 = circle 5
-      --let step2 = fc C.blue step1
-      --let cursor = translate (V2 (fromIntegral x) (fromIntegral y))
-      --             $ fc C.blue $ circle 5
-      --let topleft = translate (V2 0 0) $ fc C.green $ circle 10
-      --let scene = cursor `atop` topleft
-      --let image = Old.renderRast $ cursor `atop` rect 500 500
-      --Old.drawJPImage dpy win image
-      img <- renderScene state (800, 800) (x,y)
-      Old.drawJPImage dpy win img
-      return True
-    level2 (Old.ButtonPress ev) = do
-      print ev
-      return True
-    level2 (Old.ButtonRelease ev) = do
-      print ev
-      return True
-    level2 (Old.KeyPress ev) = do
-      print ev
-      return False
-    level2 (Old.KeyRelease ev) = do
-      print ev
-      return True
+    go 0 _   = return ()
+    go n xev = do nextEvent dpy xev
+                  Just parsed <- Old.makeX11Event dpy xev
+                  shouldQuit <- handle parsed
+                  unless shouldQuit $ go (n - 1) xev
+    handle e@Old.MotionNotify  {} = do let Just pos = e ^? Old.xev_pos
+                                       dprint pos
+                                       img <- renderScene state pos (V2 600 600)
+                                       Old.drawJPImage dpy win img
+                                       return False
+    handle e@Old.ButtonPress   {} = dprint e >> return False
+    handle e@Old.ButtonRelease {} = dprint e >> return False
+    handle e@Old.KeyPress      {} = dprint e >> return True
+    handle e@Old.KeyRelease    {} = dprint e >> return False
+    handle _                      = return False
+
+
+debugEnabled :: Bool
+debugEnabled = False
+
+dprint :: (Show s) => s -> IO ()
+dprint = when debugEnabled . print
