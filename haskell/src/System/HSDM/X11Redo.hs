@@ -70,7 +70,7 @@ mainRewrite = do
   changePropR pidA         cardinalA [ pid     ]
   changePropA allowedA     cardinalA [ closeA  ]
   mapWindow dpy win
-  img <- renderScene state (V2 w h) (V2 0 0)
+  img <- renderScene state (V2 w h)
   Old.drawJPImage dpy win img
   eventLoop state dpy win
   closeDisplay dpy
@@ -83,15 +83,12 @@ mkFramelessWindow :: Display -> V2 Position -> V2 Dimension -> IO Window
 mkFramelessWindow dpy (V2 x y) (V2 w h) = do
   let scr = defaultScreenOfDisplay dpy
   rw <- rootWindow dpy (defaultScreen dpy)
-  let visual = defaultVisualOfScreen scr
-  let depth  = defaultDepthOfScreen scr
-  let attrmask = cWOverrideRedirect .|. cWBackPixel
   backgroundColor <- Old.initColor dpy "purple"
   borderColor     <- Old.initColor dpy "green"
   createSimpleWindow dpy rw x y w h 0 borderColor backgroundColor
 
-renderScene :: State -> V2 Int -> V2 Int -> IO Old.JImage
-renderScene (State d c) (V2 x y) (V2 w h) = do
+renderScene :: State -> V2 Int -> IO Old.JImage
+renderScene (State d c) (V2 w h) = do
   (finalImage, _) <- renderSvgDocument c (Just (w, h)) 96 d
   return finalImage
 
@@ -100,12 +97,11 @@ eventLoop state dpy win = allocaXEvent $ go 1000
   where
     go 0 _   = return ()
     go n xev = do nextEvent dpy xev
-                  Just parsed <- Old.makeX11Event dpy xev
-                  shouldQuit <- handle parsed
+                  shouldQuit <- Old.makeX11Event dpy xev >>= handle . fromJust
                   unless shouldQuit $ go (n - 1) xev
     handle e@Old.MotionNotify  {} = do let Just pos = e ^? Old.xev_pos
                                        dprint pos
-                                       img <- renderScene state pos (V2 600 600)
+                                       img <- renderScene state (V2 600 600)
                                        Old.drawJPImage dpy win img
                                        return False
     handle e@Old.ButtonPress   {} = dprint e >> return False
