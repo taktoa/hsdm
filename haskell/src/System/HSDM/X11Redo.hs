@@ -33,6 +33,7 @@ import           Graphics.X11.Xlib.Extras
 import           Linear
 import           System.Exit
 import qualified System.HSDM.X11             as Old
+import           System.Posix.Process
 
 data State = State { _doc   :: Document
                    , _cache :: FontCache }
@@ -57,7 +58,15 @@ mainRewrite = do
   window_type_atom <- internAtom dpy "_NET_WM_WINDOW_TYPE" False
   type_atom <- internAtom dpy "ATOM" False
   dialog_atom <- internAtom dpy "_NET_WM_WINDOW_TYPE_DIALOG" False
+  pid_atom <- internAtom dpy "_NET_WM_PID" False
+  cardinal_atom <- internAtom dpy "CARDINAL" False
+  allowed_atom <- internAtom dpy "_NET_WM_ALLOWED_ACTIONS" False
+  close_atom <- internAtom dpy "_NET_WM_ACTION_CLOSE" False
+
   changeProperty32 dpy win window_type_atom type_atom propModeReplace [ fromIntegral dialog_atom ]
+  mypid <- getProcessID
+  changeProperty32 dpy win pid_atom cardinal_atom propModeReplace [ fromIntegral mypid ]
+  changeProperty32 dpy win allowed_atom cardinal_atom propModeAppend [ fromIntegral close_atom ]
   mapWindow dpy win
   img <- renderScene state (fromIntegral width, fromIntegral height) (0,0)
   Old.drawJPImage dpy win img
