@@ -26,7 +26,8 @@ import           Diagrams
 import           Diagrams.Backend.Rasterific
 import           Graphics.Rasterific.Svg     (loadCreateFontCache,
                                               renderSvgDocument)
-import           Graphics.Svg                (Document, loadSvgFile)
+import           Graphics.Svg                (Document, loadSvgFile,
+                                              resolveUses)
 import           Graphics.Text.TrueType      (FontCache)
 import           Graphics.X11.Xlib
 import           Graphics.X11.Xlib.Extras
@@ -35,8 +36,9 @@ import           System.Exit
 import qualified System.HSDM.X11             as Old
 import           System.Posix.Process
 
-data State = State { _doc   :: Document
-                   , _cache :: FontCache }
+data State = State { _doc     :: Document
+                   , _cache   :: FontCache
+                   , _winSize :: (Int, Int) }
 makeLenses ''State
 
 makeState :: IO State
@@ -44,16 +46,18 @@ makeState = do
   f <- loadSvgFile "../circle.svg"
   case f of
     Nothing -> error "unable to load svg"
-    Just d  -> State d <$> loadCreateFontCache "/tmp/fonty-texture-cache"
+    Just d  -> do fc <- loadCreateFontCache "/tmp/fonty-texture-cache"
+                  return $ State (resolveUses d) fc (600, 600)
 
 mainRewrite :: IO ()
 mainRewrite = do
   state <- makeState
   dpy <- openDisplay ""
   let scr = defaultScreen dpy
-  let (w, h) = ( fromIntegral $ displayWidth  dpy scr
-               , fromIntegral $ displayHeight dpy scr )
-  win <- mkFramelessWindow dpy (V2 0 0) (V2 600 600)
+  -- let (w, h) = ( fromIntegral $ displayWidth  dpy scr
+  --              , fromIntegral $ displayHeight dpy scr )
+  let Just (w, h) = state ^? winSize
+  win <- mkFramelessWindow dpy (V2 0 0) (V2 (fromIntegral w) (fromIntegral h))
   Old.initializeX11Events dpy win
   typeA        <- intern dpy "ATOM"
   cardinalA    <- intern dpy "CARDINAL"
@@ -70,7 +74,7 @@ mainRewrite = do
   changePropR pidA         cardinalA [ pid     ]
   changePropA allowedA     cardinalA [ closeA  ]
   mapWindow dpy win
-  img <- renderScene state (V2 w h)
+  img <- renderScene state
   Old.drawJPImage dpy win img
   eventLoop state dpy win
   closeDisplay dpy
@@ -86,34 +90,35 @@ mkFramelessWindow dpy (V2 x y) (V2 w h) = do
   borderColor     <- Old.initColor dpy "green"
   createSimpleWindow dpy rw x y w h 0 borderColor backgroundColor
 
-renderScene :: State -> V2 Int -> IO Old.JImage
-renderScene (State d c) (V2 w h) = do
+renderScene :: State -> IO Old.JImage
+renderScene (State d c (w, h)) = do
   (finalImage, _) <- renderSvgDocument c (Just (w, h)) 96 d
   return finalImage
 
 eventLoop :: State -> Display -> Window -> IO ()
-eventLoop state dpy win = allocaXEvent go
+eventLoop state dpy win = allocaXEvent $ go state
   where
-    go xev = do nextEvent dpy xev
-                shouldQuit <- Old.makeX11Event dpy xev >>= handle . fromJust
-                unless shouldQuit $ go xev
-    handle e@Old.ExposeNotify  {} = do let Just pos = e ^? Old.xev_pos
-                                       dprint pos
-                                       img <- renderScene state (V2 600 600)
-                                       Old.drawJPImage dpy win img
-                                       loopA
-    handle e@Old.ButtonPress   {} = dprint e >> loopA
-    handle e@Old.ButtonRelease {} = dprint e >> loopA
-    handle e@Old.KeyPress      {} = if e ^? Old.xev_key == Just xK_q
-                                    then quitA
-                                    else dprint e >> loopA
-    handle e@Old.KeyRelease    {} = dprint e >> loopA
-    handle _                      = loopA
-    loopA = return False
-    quitA = return True
+    go st xev = do nextEvent dpy xev
+                   evt <- Old.makeX11Event dpy xev
+                   res <- handle st $ fromJust evt
+                   case res of Just st' -> go st' xev
+                               Nothing  -> return ()
+    handle st e@Old.ExposeNotify  {} = dput (e ^? Old.xev_pos) >> reloadA st
+    handle st e@Old.ButtonPress   {} = dput e >> loopA st
+    handle st e@Old.ButtonRelease {} = dput e >> loopA st
+    handle st e@Old.KeyPress      {} = case fromJust (e ^? Old.xev_key)
+                                       of k | k == xK_q -> quitA st
+                                          k | k == xK_r -> rereadA st
+                                          _             -> dput e >> loopA st
+    handle st e@Old.KeyRelease    {} = dput e >> loopA st
+    handle st _                      = loopA st
+    rereadA _  = putStrLn "Rereading SVG file..." >> makeState >>= reloadA
+    reloadA st = renderScene st >>= Old.drawJPImage dpy win >> loopA st
+    loopA   st = return $ Just st
+    quitA   _  = putStrLn "Quitting..." >> return Nothing
 
 debugEnabled :: Bool
 debugEnabled = False
 
-dprint :: (Show s) => s -> IO ()
-dprint = when debugEnabled . print
+dput :: (Show s) => s -> IO ()
+dput = when debugEnabled . print
