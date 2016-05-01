@@ -1,7 +1,9 @@
 {-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE PatternSynonyms            #-}
 {-# LANGUAGE TemplateHaskell            #-}
+
 
 module System.HSDM.X11 where
 
@@ -41,6 +43,20 @@ import qualified Pipes.Prelude               as P
 import           System.Exit
 import           System.IO
 import           System.Random
+
+type Pos = X.Position
+type Dim = X.Dimension
+type Image = X.Image
+type Screen = X.Screen
+type Window = X.Window
+type Display = X.Display
+
+type XImageArray = StorableArray (Int, Int, Int) Word8
+
+data XImg = XImg { xImage     :: X.Image
+                 , xImageData :: XImageArray
+                 , xImageH    :: Int
+                 , xImageW    :: Int }
 
 type X11Position  = V2 Int
 type X11Dimension = V2 Int
@@ -110,19 +126,26 @@ data X11Event
 
 makeLenses ''X11Event
 
+data X11Action = ADraw !JImage
+               | APoll
+               | AQuit
+               | ANop
+
+instance Show X11Action where
+  show (ADraw _) = "ADraw <image>"
+  show APoll     = "APoll"
+  show AQuit     = "AQuit"
+  show ANop      = "ANop"
+
 type JImage = JP.Image JP.PixelRGBA8
 type XDiagram = QDiagram Rasterific V2 Double Any
 
 main :: IO ()
-main = startX11Pipe def testPipe `finally` putStrLn "clean exit"
+main = startX11Pipe testPipe `finally` putStrLn "clean exit"
 
 testPipe :: (P.MonadIO m) => Pipe X11Event X11Action m ()
-testPipe = go2
+testPipe = go
   where
-    go2 = do
-      P.liftIO $ print "bb"
-      P.liftIO $ hFlush stdout
-      go
     handleMotion m = do
       let Just (V2 x y) = m ^? xev_pos
       let cursor = translate (V2 (fromIntegral x) (fromIntegral (negate y)))
@@ -130,42 +153,32 @@ testPipe = go2
                    $ fc C.blue $ circle 5
       P.yield $ ADraw $ renderRast $ cursor `atop` rect 500 500
     go = do
+      P.liftIO $ hFlush stdout
       P.liftIO $ putStrLn "reblock"
       event <- P.await
       P.liftIO $ print event
-      case event of m@(MotionNotify {}) -> handleMotion m >> go2
-                    k@(KeyPress {})     -> if k ^? xev_key == Just X.xK_Q
-                                           then P.yield AQuit
-                                           else P.liftIO (print event) >> go
-                    _                   -> go
+      case event of m@MotionNotify {} -> handleMotion m >> go
+                    k@KeyPress {}     -> if k ^? xev_key == Just X.xK_q
+                                         then P.yield AQuit
+                                         else P.liftIO (print event) >> go
+                    _                 -> go
 
 renderRast :: XDiagram -> JImage
 renderRast = renderDia Rasterific options
   where
     options = RasterificOptions (mkWidth 500)
 
-data X11Action = ADraw !JImage
-               | APoll
-               | AQuit
-               | ANop
-
-data X11Config = X11Config { _queueSize :: Int }
-               deriving (Eq, Read, Show)
-
-instance Default X11Config where
-  def = X11Config { _queueSize = 256 }
-
-startX11Pipe :: X11Config -> Pipe X11Event X11Action IO () -> IO ()
-startX11Pipe cfg pipe = do
-  (environmentThread, outputX, inputX) <- startX11 cfg
+startX11Pipe :: Pipe X11Event X11Action IO () -> IO ()
+startX11Pipe pipe = do
+  (environmentThread, outputX, inputX) <- startX11
   let producer = fromInput inputX
   let consumer = toOutput outputX
   P.runEffect $ producer >-> pipe >-> consumer
   wait environmentThread
 
-startX11 :: X11Config -> IO (Async (), Output X11Action, Input X11Event)
-startX11 cfg = do
-  (outputAction, inputAction) <- spawn $ bounded 2048 -- latest ANop
+startX11 :: IO (Async (), Output X11Action, Input X11Event)
+startX11 = do
+  (outputAction, inputAction) <- spawn $ bounded 2048
   (outputEvent,  inputEvent)  <- spawn $ bounded 1024
   thread <- async $ do
     dpy <- X.openDisplay ""
@@ -173,16 +186,13 @@ startX11 cfg = do
     win <- mkUnmanagedWindow dpy 1000 400 500 500
     initializeX11Events dpy win
     X.mapWindow dpy win
-    let waitX11 = do
-          count <- X.pending dpy
-          if count == 0 then
-            X.waitForEvent dpy 1000000000
-          else
-            return False
+    let waitX11 = do count <- X.pending dpy
+                     if count == 0
+                       then X.waitForEvent dpy 1000000000
+                       else return False
     let pollX11 = getPendingX11Events dpy >>= sendAll outputEvent
-    let loop = do
-                  count <- X.pending dpy
-                  putStrLn $ "pending: " <> (show count)
+    let loop = do count <- X.pending dpy
+                  putStrLn $ "pending: " <> show count
                   waitX11
                   pollX11
                   action <- atomically $ recv inputAction
@@ -190,6 +200,7 @@ startX11 cfg = do
                     of Just (ADraw i) -> drawJPImage dpy win i >> loop
                        Just APoll     -> pollX11               >> loop
                        Just AQuit     -> X.closeDisplay dpy
+                       Just ANop      -> loop
                        Nothing        -> loop
     pollX11
     loop
@@ -197,44 +208,27 @@ startX11 cfg = do
   return (thread, outputAction, inputEvent)
 
 sendAll :: Output a -> [a] -> IO ()
-sendAll out = go
-  where
-    go []     = return ()
-    go (x:xs) = atomically (send out x) >> go xs
-
-type XEventTuple d = ( X.Window, X.Window, X.Time
-                     , CInt, CInt, CInt, CInt
-                     , X.Modifier, d, Bool )
-
-
+sendAll out = mapM_ (atomically . send out)
 
 makeX11Event :: Display -> X.XEventPtr -> IO (Maybe X11Event)
-makeX11Event dpy xev = do e <- X.getEvent xev
-                          t <- X.get_EventType xev
-                          go (e, t)
+makeX11Event dpy xev = join (go <$> X.getEvent xev <*> X.get_EventType xev)
   where
-    getType e = (e, X.ev_event_type e)
-
-    go (e, t) | t == X.keyPress      = pure <$> makeKeyPressEvent e
-    go (e, t) | t == X.keyRelease    = pure <$> makeKeyReleaseEvent e
-    go (e, t) | t == X.buttonPress   = pure <$> makeButtonPressEvent e
-    go (e, t) | t == X.buttonRelease = pure <$> makeButtonReleaseEvent e
-    go (e, t) | t == X.motionNotify  = pure <$> makeMotionNotifyEvent e
-    go (e, t) | t == X.expose        = pure <$> makeExposeNotifyEvent e
-    go (e, t) | t == X.mapNotify     = pure <$> makeMapNotifyEvent e
-    go _                             = return Nothing
-
-    -- go e | e == X.keyPress      = pure <$> makeKeyPressEvent
-    -- go e | e == X.keyRelease    = pure <$> makeKeyReleaseEvent
-    -- go e | e == X.buttonPress   = pure <$> makeButtonPressEvent
-    -- go e | e == X.buttonRelease = pure <$> makeButtonReleaseEvent
-    -- go e | e == X.motionNotify  = pure <$> makeMotionNotifyEvent
-    -- go e | e == X.expose        = pure <$> makeExposeNotifyEvent
-    -- go e | e == X.mapNotify     = pure <$> makeMapNotifyEvent
-    -- go e                        = return Nothing
+    go :: X.Event -> X.EventType -> IO (Maybe X11Event)
+    go e t | t == X.keyPress      = pure <$> makeKeyPressEvent e
+    go e t | t == X.keyRelease    = pure <$> makeKeyReleaseEvent e
+    go e t | t == X.buttonPress   = pure <$> makeButtonPressEvent e
+    go e t | t == X.buttonRelease = pure <$> makeButtonReleaseEvent e
+    go e t | t == X.motionNotify  = pure <$> makeMotionNotifyEvent e
+    go e t | t == X.expose        = pure <$> makeExposeNotifyEvent e
+    go e t | t == X.mapNotify     = pure <$> makeMapNotifyEvent e
+    go _ _                        = return Nothing
 
     makeV :: (Integral i, Num n) => i -> i -> V2 n
     makeV x y = V2 (fromIntegral x) (fromIntegral y)
+
+    -- FIXME: these use partial accessors rather than pattern matching
+    --        find a good (concise) way to pattern match these
+    --        perhaps using -XPatternSynonyms?
 
     makeKeyPressEvent e = do
       let (w, sw, t, x, y, m, k) = ( X.ev_root e, X.ev_subwindow e
@@ -271,12 +265,6 @@ makeX11Event dpy xev = do e <- X.getEvent xev
 
     convertKey k = X.keycodeToKeysym dpy k 0
 
--- get_ExposeEvent (Position, Position, Dimension, Dimension, CInt)
-
---  | MapNotify
---    { _window    :: !X.Window
---    , _event     :: !X.Window }
-
 makeModifier :: X.Modifier -> X11Modifier
 makeModifier xmod = X11Modifier
                     $ check X.shiftMask   MShift
@@ -297,21 +285,6 @@ makeModifier xmod = X11Modifier
     check m e s | m ∈ xmod = Set.insert e s
     check _ _ s            = s
     a ∈ b = (a .&. complement b) == 0
-
-type Pos = X.Position
-type Dim = X.Dimension
-type Image = X.Image
-type Screen = X.Screen
-type Window = X.Window
-type Display = X.Display
-
-type XImageArray = StorableArray (Int, Int, Int) Word8
-
-data XImg = XImg { xImage     :: X.Image
-                 , xImageData :: XImageArray
-                 , xImageH    :: Int
-                 , xImageW    :: Int
-                 }
 
 initializeX11Events :: Display -> Window -> IO ()
 initializeX11Events dpy win = X.selectInput dpy win $ foldr (.|.) 0 masks
@@ -380,37 +353,6 @@ makeXImage dpy img = do xid <- fromJPData img
 
 drawJPImage :: X.Display -> X.Window -> JImage -> IO ()
 drawJPImage dpy win img = makeXImage dpy img >>= drawImg dpy win
-
-convertDynImage :: JP.DynamicImage -> Maybe JImage
-convertDynImage (JP.ImageY8     img) = Just $ JP.promoteImage img
-convertDynImage (JP.ImageYA8    img) = Just $ JP.promoteImage img
-convertDynImage (JP.ImageRGB8   img) = Just $ JP.promoteImage img
-convertDynImage (JP.ImageRGBA8  img) = Just $ JP.promoteImage img
-convertDynImage (JP.ImageY16      _) = Nothing
-convertDynImage (JP.ImageYF       _) = Nothing
-convertDynImage (JP.ImageYA16     _) = Nothing
-convertDynImage (JP.ImageRGB16    _) = Nothing
-convertDynImage (JP.ImageRGBF     _) = Nothing
-convertDynImage (JP.ImageRGBA16   _) = Nothing
-convertDynImage (JP.ImageYCbCr8   _) = Nothing
-convertDynImage (JP.ImageCMYK8    _) = Nothing
-convertDynImage (JP.ImageCMYK16   _) = Nothing
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 mkUnmanagedWindow :: Display
                   -> Pos -> Pos

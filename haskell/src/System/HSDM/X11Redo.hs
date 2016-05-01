@@ -81,8 +81,7 @@ mainRewrite = do
 
 mkFramelessWindow :: Display -> V2 Position -> V2 Dimension -> IO Window
 mkFramelessWindow dpy (V2 x y) (V2 w h) = do
-  let scr = defaultScreenOfDisplay dpy
-  rw <- rootWindow dpy (defaultScreen dpy)
+  rw <- rootWindow dpy $ defaultScreen dpy
   backgroundColor <- Old.initColor dpy "purple"
   borderColor     <- Old.initColor dpy "green"
   createSimpleWindow dpy rw x y w h 0 borderColor backgroundColor
@@ -93,23 +92,25 @@ renderScene (State d c) (V2 w h) = do
   return finalImage
 
 eventLoop :: State -> Display -> Window -> IO ()
-eventLoop state dpy win = allocaXEvent $ go 1000
+eventLoop state dpy win = allocaXEvent go
   where
-    go 0 _   = return ()
-    go n xev = do nextEvent dpy xev
-                  shouldQuit <- Old.makeX11Event dpy xev >>= handle . fromJust
-                  unless shouldQuit $ go (n - 1) xev
-    handle e@Old.MotionNotify  {} = do let Just pos = e ^? Old.xev_pos
+    go xev = do nextEvent dpy xev
+                shouldQuit <- Old.makeX11Event dpy xev >>= handle . fromJust
+                unless shouldQuit $ go xev
+    handle e@Old.ExposeNotify  {} = do let Just pos = e ^? Old.xev_pos
                                        dprint pos
                                        img <- renderScene state (V2 600 600)
                                        Old.drawJPImage dpy win img
-                                       return False
-    handle e@Old.ButtonPress   {} = dprint e >> return False
-    handle e@Old.ButtonRelease {} = dprint e >> return False
-    handle e@Old.KeyPress      {} = dprint e >> return True
-    handle e@Old.KeyRelease    {} = dprint e >> return False
-    handle _                      = return False
-
+                                       loopA
+    handle e@Old.ButtonPress   {} = dprint e >> loopA
+    handle e@Old.ButtonRelease {} = dprint e >> loopA
+    handle e@Old.KeyPress      {} = if e ^? Old.xev_key == Just xK_q
+                                    then quitA
+                                    else dprint e >> loopA
+    handle e@Old.KeyRelease    {} = dprint e >> loopA
+    handle _                      = loopA
+    loopA = return False
+    quitA = return True
 
 debugEnabled :: Bool
 debugEnabled = False
