@@ -29,6 +29,7 @@ import           Graphics.Rasterific.Svg     (loadCreateFontCache,
 import           Graphics.Svg                (Document, loadSvgFile)
 import           Graphics.Text.TrueType      (FontCache)
 import           Graphics.X11.Xlib
+import           Graphics.X11.Xlib.Extras
 import           Linear
 import           System.Exit
 import qualified System.HSDM.X11             as Old
@@ -51,8 +52,12 @@ mainRewrite = do
   let scr = defaultScreen dpy
   let (width, height) = ( fromIntegral $ displayWidth  dpy scr
                         , fromIntegral $ displayHeight dpy scr )
-  win <- mkFramelessWindow dpy (0,0) (width,height)
+  win <- mkFramelessWindow dpy (0,0) (1024,768)
   Old.initializeX11Events dpy win
+  window_type_atom <- internAtom dpy "_NET_WM_WINDOW_TYPE" False
+  type_atom <- internAtom dpy "ATOM" False
+  dialog_atom <- internAtom dpy "_NET_WM_WINDOW_TYPE_DIALOG" False
+  changeProperty32 dpy win window_type_atom type_atom propModeReplace [ fromIntegral dialog_atom ]
   mapWindow dpy win
   img <- renderScene state (fromIntegral width, fromIntegral height) (0,0)
   Old.drawJPImage dpy win img

@@ -190,11 +190,13 @@ makeX11Event dpy xev = X.get_EventType xev >>= go2
     go e | e == X.buttonPress   = pure . ButtonPress   <$> makeMouseEvent
     go e | e == X.buttonRelease = pure . ButtonRelease <$> makeMouseEvent
     go e | e == X.motionNotify  = pure . MotionNotify  <$> makeMotionEvent
-    go _                        = return Nothing
+    --go e | e == X.expose        = pure . Expose        <$> makeExposeEvent
+    go e                        = putStrLn ("unhandled type:" <> show e) >> return Nothing
 
     makeKeyEvent    = makeEvent X.get_KeyEvent    convertKey
     makeMouseEvent  = makeEvent X.get_ButtonEvent return
     makeMotionEvent = makeEvent X.get_MotionEvent (const (return ()))
+    --makeExposeEvent = makeEvent X.get_ExposeEvent
 
     convertKey k = X.keycodeToKeysym dpy k 0
 
@@ -250,6 +252,7 @@ initializeX11Events dpy win = X.selectInput dpy win $ foldr (.|.) 0 masks
             , X.buttonPressMask
             , X.buttonReleaseMask
             , X.pointerMotionMask ]
+--            , X.exposureMask ]
 
 getPendingX11Events :: Display -> IO [X11Event]
 getPendingX11Events dpy = X.allocaXEvent $ flip go []
