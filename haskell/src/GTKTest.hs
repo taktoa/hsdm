@@ -1,21 +1,15 @@
 module Main where
 
 import           Data.Monoid
+import           Data.Text
 import           System.HSDM.GTKRedo
-import           System.HSDM.UI
-import Data.Text
-import System.HSDM.PAM
+import           System.HSDM.PAM
 
-data Callbacks = Callbacks
-instance HSDMCallbacks Callbacks where
-  usernameEntered g c user = do
-    putStrLn $ "got user " <> show user
-    reply <- tokenRequest g [PamMessage "Password:" PamPromptEchoOff]
-    return ()
+usernameEntered :: LoginCB
+usernameEntered user callback = do
+  putStrLn $ "got user " <> show user
+  callback [PamMessage "Password:" PamPromptEchoOff]
 
 main :: IO ()
-main = do
-  foo <- mkState
-  let cb = Callbacks
-  runGui foo cb
+main = runGUI usernameEntered gtkGreeter
 --System.HSDM.GTKRedo.main

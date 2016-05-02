@@ -7,60 +7,43 @@ import           "gtk3" Graphics.UI.Gtk
 
 import           Data.Text       (Text)
 import qualified Data.Text       as T
-import           System.HSDM.UI
-import System.HSDM.PAM
+import           System.HSDM.PAM
 
+type AuthRequest = PamMessage
 
-data GtkState = GtkState {  _window :: Window
-                          , _userBuf :: EntryBuffer
-                          , _passBuf :: EntryBuffer
-                          , _button :: Button
-                          , _label :: Label }
-instance HSDMGui GtkState where
-  runGui g c = loginScreen g c (\(Login u p) ->
-                            putStrLn $ mconcat [ "button pressed: "
-                                               , "username = ", show u, ", "
-                                               , "password = ", show p ])
-  tokenRequest g msgs = go msgs
-    where
-      go [PamMessage msg style] = do
-        labelSetText (_label g) msg
-        return [ PamResponse "foo" ]
---    putStrLn "token req"
-    -- open pw prompt
-    --mainIteration
+type LoginCB = Text -> ([AuthRequest] -> IO ()) -> IO ()
 
-data Login = Login { _username :: Text
-                   , _password :: Text }
-             deriving (Eq, Show, Read)
+newtype Greeter = Greeter { _greeter :: LoginCB -> IO () }
 
-mkState :: IO GtkState
-mkState = do
+runGUI :: LoginCB -> Greeter -> IO ()
+runGUI cb (Greeter g) = g cb
+
+gtkGreeter :: Greeter
+gtkGreeter = Greeter $ \callback -> do
   initGUI
 
   builder <- builderNew
   builderAddFromFile builder "res/hsdm.ui"
 
-  window  <- builderGetObject builder castToWindow      "window"
-  userBuf <- builderGetObject builder castToEntryBuffer "usernameBuf"
-  passBuf <- builderGetObject builder castToEntryBuffer "passwordBuf"
-  button  <- builderGetObject builder castToButton      "submit"
-  label   <- builderGetObject builder castToLabel       "passwordLabel"
-
-  return $ GtkState window userBuf passBuf button label
-
-loginScreen :: (HSDMCallbacks c) => GtkState -> c -> (Login -> IO ()) -> IO ()
-loginScreen g c callback = do
+  window <- builderGetObject builder castToWindow      "window"
+  buffer <- builderGetObject builder castToEntryBuffer "buffer"
+  button <- builderGetObject builder castToButton      "submit"
+  label  <- builderGetObject builder castToLabel       "label"
 
   let textBufferGetAll b = get b entryBufferText
 
-  on (_button g) buttonActivated $ do
-    username <- textBufferGetAll $ _userBuf g
-    password <- textBufferGetAll $ _passBuf g
-    callback (Login username password)
-    usernameEntered g c username
+  let handleAuth (PamMessage msg style) = do labelSetText label msg
+                                             return ()
+                                             -- putStrLn "token req"
+                                             -- open pw prompt
+                                             -- mainIteration
 
-  on (_window g) objectDestroy mainQuit
+  on button buttonActivated $ do
+    username <- textBufferGetAll buffer
+    callback username $ mapM_ handleAuth
 
-  widgetShowAll $ _window g
+  on window objectDestroy mainQuit
+
+  widgetShowAll window
   mainGUI
+
