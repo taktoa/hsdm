@@ -76,6 +76,7 @@
                 <property name="label" translatable="yes">Submit</property>
                 <property name="visible">True</property>
                 <property name="can_focus">True</property>
+                <property name="can_default">True</property>
                 <property name="receives_default">True</property>
                 <property name="margin_left">50</property>
                 <property name="margin_right">50</property>
