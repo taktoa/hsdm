@@ -14,10 +14,9 @@ FCM="$(nix-lookup xorg.fontcursormisc)/lib/X11/fonts/misc"
 
 export XKB_BINDIR
 
-Xnest                      \
+Xephyr                     \
     -display ":0" ":1"     \
     -xkbdir "$XKB_DIR"     \
-    -geometry "1024x768"   \
+    -screen "800x600"     \
     -fp "${FMM},${FCM}"    \
-    -depth 24              \
     -auth "/tmp/hsdm.auth"

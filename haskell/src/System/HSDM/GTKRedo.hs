@@ -5,9 +5,40 @@ module System.HSDM.GTKRedo where
 -- FIXME: remove PackageImport when done
 import           "gtk3" Graphics.UI.Gtk
 
-import           Data.Text       (Text)
-import qualified Data.Text       as T
+import           Data.Text            (Text)
+import qualified Data.Text            as T
+import           System.Exit
 import           System.HSDM.PAM
+import           System.Posix.Signals (Handler (..), installHandler, sigINT)
+
+
+main :: IO ()
+main = do
+  initGUI
+
+  builder <- builderNew
+  builderAddFromFile builder "res/hsdm.ui"
+
+  backgroundWindow <- builderGetObject builder castToWindow "backgroundWindow"
+  promptWindow     <- builderGetObject builder castToWindow "promptWindow"
+
+  screen <- windowGetScreen backgroundWindow
+  screenW <- screenGetWidth  screen
+  screenH <- screenGetHeight screen
+  print (screenW, screenH)
+  windowMove   backgroundWindow 20 20
+  --windowResize backgroundWindow (screenW - 100) (screenH - 100)
+  windowResize backgroundWindow 512 384
+
+  widgetShowAll backgroundWindow
+  widgetShowAll promptWindow
+
+  installHandler sigINT (Catch (mainQuit >> exitSuccess)) Nothing
+
+  mainGUI
+
+
+
 
 type AuthRequest = PamMessage
 
